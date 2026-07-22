@@ -1,0 +1,22 @@
+account_capital_usd: 250
+# Per-trade and total deploy caps — utilize up to 85% of capital/equity.
+max_premium_pct_of_available: 85
+max_deployed_pct_of_equity: 85
+max_concurrent_positions: 0
+max_daily_loss: 0
+max_consecutive_losses: 0
+max_trades_per_day: 0
+cooldown_after_exit_minutes: 5
+# Crypto is 24×7 — no NSE-style daily force flat.
+force_exit_time: null
+default_lots: 10
+confidence_lot_sizing:
+  enabled: true
+  max_lots: 120
+  tiers:
+    - min_confidence: 90
+      lots: 80
+    - min_confidence: 80
+      lots: 40
+    - min_confidence: 70
+      lots: 20

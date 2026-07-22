@@ -1,0 +1,9 @@
+# Delta Exchange India — Algo-Crypto
+api_base_url: "https://api.india.delta.exchange"
+# Demo/testnet (use with demo API keys):
+# api_base_url: "https://cdn-ind.testnet.deltaex.org"
+websocket_url: "wss://socket.india.delta.exchange"
+# testnet WS: wss://socket-ind.testnet.deltaex.org
+reconnect_backoff_seconds: [1, 2, 4, 8, 16, 32, 60]
+stale_feed_seconds: 5
+request_timeout_seconds: 20

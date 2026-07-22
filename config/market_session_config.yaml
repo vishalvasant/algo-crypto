@@ -1,0 +1,14 @@
+# Crypto options trade 24×7. Expiry force-flat at 17:30 IST (12:00 UTC).
+timezone: Asia/Kolkata
+# Session always open except optional quiet hours (disabled by default).
+market_open: "00:00"
+market_close: "23:59"
+twenty_four_seven: true
+# No NSE-style weekend close
+skip_weekends: false
+# Options expire 17:30 IST — stop new entries this many minutes before
+expiry_force_exit_time: "17:30"
+expiry_entry_cutoff_minutes: 45
+# Daily chain refresh around Delta strike launch (~12:00 UTC = 17:30 IST)
+chain_refresh_utc_hour: 12
+chain_refresh_interval_minutes: 5

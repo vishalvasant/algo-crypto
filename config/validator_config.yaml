@@ -1,0 +1,18 @@
+validator_version: validator_v1.0.0
+# Crypto trades 24×7 (IST clock used for logging only).
+entry_start_time: "00:00"
+entry_end_time: "23:59"
+# Delta option spreads are wider than NSE index options.
+max_spread_pct: 12.0
+# Soft liquidity floors for crypto (paper uses relaxed mode below).
+min_option_volume: 0
+min_option_oi: 0
+# Daily expiries exist almost every day — do not hard-block the whole day.
+expiry_day_block_entries: false
+cooldown_after_exit_minutes: 5
+paper_relaxed_liquidity: true
+required_fields:
+  - ltp
+  - bid
+  - ask
+  - oi

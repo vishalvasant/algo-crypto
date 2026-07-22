@@ -1,0 +1,22 @@
+# Delta India options fee model (paper + live estimation).
+# Docs: fees on notional, capped at % of premium; +18% GST.
+# Product API often reports taker/maker ~0.0001 (0.01%); marketing tables also list 0.03%.
+# Prefer live product rates when available; these are fallbacks.
+options_taker_rate: 0.0001
+options_maker_rate: 0.0001
+premium_fee_cap_pct: 3.5
+gst_pct: 18.0
+# Paper market orders behave as taker.
+assume_role: taker
+# Long options at 100x: capital locked ≈ full premium (not underlying/leverage).
+long_option_leverage: 100
+# Orderbook gates (buy CE/PE)
+orderbook:
+  enabled: true
+  depth: 10
+  # Reject if top-of-book ask size (lots) is below this for our order size ratio
+  min_ask_size_lots: 50
+  # Require ask depth covering at least this multiple of our order lots (top N levels)
+  min_ask_coverage_mult: 1.0
+  # Skip if bid/ask imbalance is extremely one-sided against buyers (asks >> bids)
+  max_ask_bid_size_ratio: 8.0

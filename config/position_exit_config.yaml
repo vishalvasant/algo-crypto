@@ -1,0 +1,18 @@
+# Exit when momentum / structure turns unfavorable (not fixed ₹ SL/target).
+# Priority: trend/bias reversal (VWAP flip) → adverse premium drop → trail → time stop.
+mode: momentum
+bias_flip_exit: true
+# Spot must clear VWAP by this many points before trend_reversal (cuts tick noise).
+bias_flip_buffer_points: 8
+# On trend_reversal exit, immediately try opposite side (CE↔PE).
+flip_on_trend_reversal: true
+trail_giveback_pct: 35
+adverse_move_pct_from_entry: 12
+# Only start trailing once unrealized premium gain ≥ this % of entry.
+min_profit_before_trail_pct: 18
+min_hold_seconds: 20
+# Cap marathon holds when VWAP bias never flips (was 0 = unlimited → 60–90m rides).
+max_hold_minutes: 25
+# Tighter when router last primary regime is high_volatility
+high_vol_trail_giveback_pct: 30
+high_vol_adverse_move_pct_from_entry: 10

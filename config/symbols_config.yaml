@@ -1,0 +1,35 @@
+# BTC + ETH options on Delta Exchange India
+underlyings:
+  - BTC
+  - ETH
+
+# Primary index used for features / VWAP (BTC lead).
+# Delta India returns reliable marks on BTCUSD / ETHUSD perpetuals.
+primary_underlying: BTC
+index_symbols:
+  BTC: "BTCUSD"
+  ETH: "ETHUSD"
+
+# Exchange labels (logical — Delta uses product_id / symbol)
+exchange_spot: DELTA
+exchange_options: DELTA
+
+# Prefer nearest daily expiry (D1); fall back to D2.
+expiry_preference: ["D1", "D2"]
+# How many calendar days ahead to consider for "nearest" live expiries
+max_expiry_lookahead_days: 3
+
+# Strike band around ATM (in strike steps)
+atm_band_steps: 8
+# Default steps if product metadata missing (BTC D1 ≈ 200 near ATM, ETH ≈ 10–20)
+strike_step_defaults:
+  BTC: 200
+  ETH: 20
+
+# Delta contract size: 1 Lot = this many units of underlying
+# BTC: 1 Lot = 0.001 BTC · ETH: 1 Lot = 0.01 ETH
+contract_size_defaults:
+  BTC: 0.001
+  ETH: 0.01
+
+tradable_strike: ATM

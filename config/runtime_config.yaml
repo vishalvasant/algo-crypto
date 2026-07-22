@@ -1,0 +1,9 @@
+event_queue_max_size: 10000
+reconciliation_interval_seconds: 60
+option_quote_sample_interval_seconds: 1
+scan_interval_seconds: 30
+# Backtest only: mark exits this often (live ≈ WS/REST quote pace).
+backtest_exit_interval_seconds: 2
+rest_quote_poll_interval_seconds: 30
+rest_quote_poll_interval_market_seconds: 2
+watchlist_stream_interval_ms: 750

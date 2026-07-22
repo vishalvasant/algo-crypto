@@ -1,0 +1,15 @@
+# Algo-Crypto production overlay
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+services:
+  postgres:
+    ports: !reset []
+
+  redis:
+    ports: !reset []
+
+  trading-engine:
+    ports: !reset []
+
+  web-app:
+    ports:
+      - "${WEB_PORT:-8081}:8080"

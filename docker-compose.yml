@@ -1,0 +1,87 @@
+# Algo-Crypto — independent stack (do not share ports/DB with algo-flat)
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-algocrypto}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-algocrypto}
+      POSTGRES_DB: ${POSTGRES_DB:-algocrypto}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata_crypto:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-algocrypto} -d ${POSTGRES_DB:-algocrypto}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  trading-engine:
+    build: ./trading-engine
+    env_file:
+      - .env
+    environment:
+      CONFIG_DIR: /app/config
+      MIGRATIONS_DIR: /app/db/migrations
+      DATABASE_URL: postgresql://${POSTGRES_USER:-algocrypto}:${POSTGRES_PASSWORD:-algocrypto}@postgres:5432/${POSTGRES_DB:-algocrypto}
+      REDIS_URL: redis://redis:6379/0
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TRADING_MODE: ${TRADING_MODE:-paper}
+    volumes:
+      - ./config:/app/config:ro
+      - ./db/migrations:/app/db/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${ENGINE_PORT:-8002}:8001"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+    restart: unless-stopped
+
+  web-app:
+    build: ./web-app
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-algocrypto}:${POSTGRES_PASSWORD:-algocrypto}@postgres:5432/${POSTGRES_DB:-algocrypto}
+      TRADING_ENGINE_URL: http://trading-engine:8001
+      WEB_USERNAME: ${WEB_USERNAME:-admin}
+      WEB_PASSWORD: ${WEB_PASSWORD:-algocrypto}
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production-crypto}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      trading-engine:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8081}:8080"
+    restart: unless-stopped
+
+volumes:
+  pgdata_crypto:
