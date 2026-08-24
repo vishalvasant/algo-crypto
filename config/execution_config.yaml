@@ -3,3 +3,14 @@ product: MIS
 price_buffer_ticks: 1
 max_retry_attempts: 2
 retry_delay_seconds: 1
+
+# Gap-Fix Phase 3 — executable price / slippage gates
+max_expected_slippage_pct: 3.0
+max_entry_spread_pct: 12.0
+require_full_book_fill: false
+# Cap order size to this % of visible ask (buy) / bid (sell) depth
+max_order_pct_of_depth: 40
+# When no book: apply this many bps of adverse slippage vs LTP
+ltp_fallback_slippage_bps: 15
+extra_slippage_bps: 0
+size_impact_slippage_mult: 0.5

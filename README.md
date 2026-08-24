@@ -2,7 +2,7 @@
 
 Paper-first **BTC + Ethereum options** terminal on **Delta Exchange India**.
 
-Independent from [algo-flat](../algo-flat) — separate Docker stack, Postgres, Redis, and ports.
+Independent from [algo-flat](../algo-flat) — separate Docker stack, Postgres, and ports.
 
 ## Stack
 
@@ -11,7 +11,6 @@ Independent from [algo-flat](../algo-flat) — separate Docker stack, Postgres, 
 | Web UI | **8081** | `admin` / `algocrypto` |
 | Trading engine | **8002** | FastAPI health + control |
 | Postgres | **5433** | DB `algocrypto` |
-| Redis | **6380** | |
 
 ## Underlyings
 
@@ -36,6 +35,10 @@ Open http://localhost:8081
 - `config/broker_config.yaml` — Delta India REST/WS
 - `config/symbols_config.yaml` — BTC + ETH, index symbols, ATM band
 - `config/market_session_config.yaml` — 24×7 + expiry cutoff
+
+## How trades are decided
+
+See **[DECISION_FLOW.md](./DECISION_FLOW.md)** — full entry / hold / exit pipeline, scoring basis, and config knobs.
 
 ## Layout
 

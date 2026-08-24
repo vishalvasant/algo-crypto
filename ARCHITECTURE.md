@@ -67,10 +67,10 @@ Production-style hybrid intraday options trading system for NSE NIFTY weekly opt
 │  │  Contract Selector (startup + ATM band refresh)                           │
 │  └──────────────────────┬───────────────────────────────────────────────────┘
 │                         │                                                    │
-│  ┌──────────────────────▼──────────┐   ┌─────────────┐   ┌──────────────┐   │
-│  │         PostgreSQL              │   │ Redis (opt) │   │   Volumes    │   │
-│  │  candles, signals, trades, ...  │   │ notify pub  │   │  pgdata/logs │   │
-│  └─────────────────────────────────┘   └─────────────┘   └──────────────┘   │
+│  ┌──────────────────────▼──────────┐                   ┌──────────────┐   │
+│  │         PostgreSQL              │                   │   Volumes    │   │
+│  │  candles, signals, trades, ...  │                   │  pgdata/logs │   │
+│  └─────────────────────────────────┘                   └──────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -94,8 +94,8 @@ Production-style hybrid intraday options trading system for NSE NIFTY weekly opt
 
 - **Single process:** `trading-engine` runs one asyncio event loop
 - **Internal event bus:** `asyncio.Queue` per event type (candle, quote, signal, order, system)
-- **Web app:** separate service; reads Postgres + optional Redis subscribe for real-time notifications
-- **No multi-process bus in V1** unless notification latency requires Redis
+- **Web app:** separate service; reads Postgres; polls / SSE for UI updates
+- **No multi-process bus in V1** — in-process asyncio queues only
 
 ---
 
@@ -328,7 +328,7 @@ Risk engine always overrides ML.
 | Notifications | Risk breach, stale feed, order rejected, position closed, kill switch |
 | Kill switch | Manual toggle → trading-engine API |
 
-**Real-time:** SSE or WebSocket from web-api; optional Redis pub/sub from trading-engine
+**Real-time:** SSE or WebSocket from web-api
 
 ---
 
@@ -839,7 +839,6 @@ FLATTRADE_API_KEY=
 FLATTRADE_API_SECRET=
 FLATTRADE_REDIRECT_URL=
 DATABASE_URL=postgresql://algocrypto:algocrypto@postgres:5432/algocrypto
-REDIS_URL=redis://redis:6379/0          # optional
 TRADING_MODE=paper                       # paper | live
 LOG_LEVEL=INFO
 ```
@@ -1030,7 +1029,6 @@ Validated Signal ──►│  ML Filter  │──► ml_scores (always logged 
 | Derived Greeks | Black-Scholes layer when rules require delta/IV |
 | ML active mode | After N paper/live labeled trades |
 | Multi-strike selection | ITM/OTM by delta band |
-| Redis event bus | If single-process notification latency insufficient |
 | Session replay tool | Record WS feed; replay through scanner offline |
 | Registered algo API key | Higher order rate; market orders if permitted |
 
@@ -1380,7 +1378,6 @@ Merged reference config (split into YAML files in implementation):
 | Web backend | FastAPI | SSE, REST, async |
 | Web frontend | React + Vite (or Next.js) | Minimal dashboard |
 | Containers | Docker Compose | Mac dev + server deploy |
-| Optional cache | Redis 7 | Notification pub/sub |
 | Testing | pytest + pytest-asyncio | Unit + integration |
 | HTTP client | httpx | Async REST to Flattrade |
 

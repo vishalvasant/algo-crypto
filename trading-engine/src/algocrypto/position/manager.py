@@ -11,8 +11,9 @@ from algocrypto.broker.base import BrokerAdapter
 from algocrypto.config import AppConfig
 from algocrypto.journal.writer import JournalWriter
 from algocrypto.market_data.engine import MarketDataEngine
-from algocrypto.models.events import ExecutionRequest, QuoteUpdate, TradingMode
+from algocrypto.models.events import ExecutionRequest, QuoteUpdate, SystemEvent, TradingMode
 from algocrypto.position.exit_rules import evaluate_momentum_exit
+from algocrypto.position.thesis import TradeThesis, assess_thesis
 from algocrypto.risk.engine import RiskEngine
 
 logger = structlog.get_logger(__name__)
@@ -37,6 +38,8 @@ class OpenPosition:
   mfe: Decimal = Decimal("0")
   mae: Decimal = Decimal("0")
   signal_snapshot: dict = field(default_factory=dict)
+  thesis: TradeThesis | None = None
+  thesis_score: int | None = None
 
 
 class PositionManager:
@@ -112,6 +115,7 @@ class PositionManager:
     signal,
     sizing,
     fill_price: Decimal,
+    thesis: TradeThesis | None = None,
   ) -> None:
     size = getattr(sizing, "contract_size", None) or Decimal(
       str(getattr(signal, "scanner_metadata", {}).get("contract_size", "0.001"))
@@ -152,6 +156,8 @@ class PositionManager:
       entry_spot=spot,
       entry_fee_usd=entry_fee,
       signal_snapshot=signal.feature_snapshot.model_dump(mode="json"),
+      thesis=thesis,
+      thesis_score=100 if thesis is not None else None,
     )
     if self._trade_open_hook is not None:
       try:
@@ -176,6 +182,13 @@ class PositionManager:
       pos.mfe = max(pos.mfe, pnl_points)
       pos.mae = min(pos.mae, pnl_points)
 
+      from algocrypto.market_data.atr import approx_atr
+      from algocrypto.models.events import CandleInterval
+
+      atr = approx_atr(
+        self._market_data.candles(CandleInterval.M1),
+        int(exit_cfg.get("reversal_atr_lookback_bars", 14)),
+      )
       decision = evaluate_momentum_exit(
         option_side=pos.option_side,
         entry_price=pos.entry_price,
@@ -186,7 +199,44 @@ class PositionManager:
         cfg=exit_cfg,
         force_exit=force,
         regime_primary=self._regime_primary,
+        atr=atr,
       )
+      # Phase 6: thesis degradation (after min hold; configurable threshold)
+      if not decision.should_exit and pos.thesis is not None:
+        hold_s = (datetime.now(tz=timezone.utc) - pos.entry_ts).total_seconds()
+        min_thesis_hold = int(exit_cfg.get("thesis_min_hold_seconds", 60))
+        if hold_s >= min_thesis_hold:
+          spot_now = self._market_data.spot_ltp
+          vwap_now = self._market_data.session_vwap_value
+          assessment = assess_thesis(
+            pos.thesis,
+            spot=spot_now,
+            vwap=vwap_now,
+            regime_primary=self._regime_primary,
+            # Live structure/IV not wired into PositionManager — use None
+            # so we don't treat the entry snapshot as current market state.
+            structure=None,
+            iv_regime=None,
+            cfg=exit_cfg,
+          )
+          pos.thesis_score = assessment.score
+          if assessment.degraded:
+            decision = type(decision)(True, "thesis_degradation")
+            await self._journal.write_system_event(
+              SystemEvent(
+                event_type="thesis_assessment",
+                ts=datetime.now(tz=timezone.utc),
+                severity="warning",
+                message="thesis_degradation",
+                metadata={
+                  "tsym": pos.tsym,
+                  "score": assessment.score,
+                  "reasons": list(assessment.reasons),
+                  "detail": assessment.detail,
+                },
+              )
+            )
+
       if decision.should_exit:
         reason = decision.reason or "exit"
         closed_side = pos.option_side
@@ -395,7 +445,13 @@ class PositionManager:
     self._last_exit_any = now
     if self._trade_close_hook is not None:
       try:
-        self._trade_close_hook(pos.setup_type, net_pnl, exit_reason)
+        self._trade_close_hook(pos.setup_type, net_pnl, exit_reason, pos)
+      except TypeError:
+        # Back-compat if hook only accepts 3 args
+        try:
+          self._trade_close_hook(pos.setup_type, net_pnl, exit_reason)
+        except Exception:
+          logger.exception("trade_close_hook_failed")
       except Exception:
         logger.exception("trade_close_hook_failed")
 

@@ -18,17 +18,6 @@ services:
       retries: 10
     restart: unless-stopped
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "${REDIS_PORT:-6380}:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    restart: unless-stopped
-
   trading-engine:
     build: ./trading-engine
     env_file:
@@ -37,7 +26,6 @@ services:
       CONFIG_DIR: /app/config
       MIGRATIONS_DIR: /app/db/migrations
       DATABASE_URL: postgresql://${POSTGRES_USER:-algocrypto}:${POSTGRES_PASSWORD:-algocrypto}@postgres:5432/${POSTGRES_DB:-algocrypto}
-      REDIS_URL: redis://redis:6379/0
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       TRADING_MODE: ${TRADING_MODE:-paper}
     volumes:
@@ -45,8 +33,6 @@ services:
       - ./db/migrations:/app/db/migrations:ro
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     ports:
       - "${ENGINE_PORT:-8002}:8001"

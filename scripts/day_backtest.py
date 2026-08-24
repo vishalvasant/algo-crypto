@@ -598,7 +598,8 @@ async def run_backtest(
     from_snap: bool = False,
     refresh_snap: bool = False,
     snap_only: bool = False,
-) -> None:
+    return_stats: bool = False,
+) -> DayStats | None:
     day = day or datetime.now(tz=IST).date()
     config = get_config()
     broker: FlattradeAdapter | None = None
@@ -1512,6 +1513,9 @@ async def run_backtest(
         f"\nPremium marking: {opt_entries}/{len(stats.closed)} trades used option candles"
     )
     print("=" * 64)
+    if return_stats:
+        return stats
+    return None
 
 
 if __name__ == "__main__":

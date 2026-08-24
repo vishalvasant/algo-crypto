@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime, time
+from dataclasses import dataclass, field
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -11,6 +11,13 @@ from algocrypto.config import AppConfig
 from algocrypto.db.connection import get_pool
 from algocrypto.db.paper_account import ensure_paper_account
 from algocrypto.models.events import CandidateSignal, OptionState
+from algocrypto.risk.circuit_breakers import (
+  CircuitDecision,
+  CircuitSnapshot,
+  evaluate_circuit_breakers,
+  post_trade_halt_reason,
+)
+from algocrypto.risk.states import RiskState
 from algocrypto.symbols_util import account_capital_usd, premium_usd
 
 logger = structlog.get_logger(__name__)
@@ -28,6 +35,8 @@ class EntrySizing:
   lots: int = 0
   confidence: int = 0
   contract_size: Decimal = Decimal("0.001")
+  size_breakdown: dict | None = None
+  binding_reason: str | None = None
 
 
 def lots_for_confidence(risk_cfg: dict, confidence: int) -> int:
@@ -38,7 +47,6 @@ def lots_for_confidence(risk_cfg: dict, confidence: int) -> int:
     return default
 
   tiers = list(sizing.get("tiers") or [])
-  # Highest min_confidence that confidence meets
   tiers_sorted = sorted(
     tiers,
     key=lambda t: int(t.get("min_confidence", 0)),
@@ -64,16 +72,27 @@ def fit_lots_to_capital(
   deployed: Decimal,
   equity: Decimal,
 ) -> tuple[int, Decimal]:
-  """Confidence lots, then fill remaining deploy room when confidence is high.
-
-  Delta: funds ≈ option_price_usd × lots × contract_size
-  (e.g. 100 lots × $51 × 0.001 BTC ≈ $5.10).
-  """
+  """Confidence lots, then fill remaining deploy room when confidence is high."""
   target = lots_for_confidence(risk_cfg, confidence)
   max_lots = int((risk_cfg.get("confidence_lot_sizing") or {}).get("max_lots", target))
-  max_pct = Decimal(str(risk_cfg.get("max_premium_pct_of_available", 85)))
+  max_pct = Decimal(
+    str(
+      risk_cfg.get(
+        "max_premium_deployed_pct",
+        risk_cfg.get("max_premium_pct_of_available", 85),
+      )
+    )
+  )
   max_for_trade = available * max_pct / Decimal("100")
-  deploy_cap = equity * Decimal(str(risk_cfg.get("max_deployed_pct_of_equity", 85))) / Decimal("100")
+  deploy_pct = Decimal(
+    str(
+      risk_cfg.get(
+        "max_exposure_pct",
+        risk_cfg.get("max_deployed_pct_of_equity", 85),
+      )
+    )
+  )
+  deploy_cap = equity * deploy_pct / Decimal("100")
   room = deploy_cap - deployed
 
   def _ok(n: int) -> Decimal | None:
@@ -99,6 +118,27 @@ def fit_lots_to_capital(
   return lots, prem
 
 
+def _parse_risk_state(raw: str | None) -> RiskState:
+  try:
+    return RiskState(str(raw or "NORMAL"))
+  except ValueError:
+    return RiskState.NORMAL
+
+
+def _ts_within_hour(timestamps: list, *, now: datetime | None = None) -> list[datetime]:
+  now = now or datetime.now(tz=timezone.utc)
+  cutoff = now - timedelta(hours=1)
+  out: list[datetime] = []
+  for ts in timestamps or []:
+    if ts is None:
+      continue
+    if getattr(ts, "tzinfo", None) is None:
+      ts = ts.replace(tzinfo=timezone.utc)
+    if ts >= cutoff:
+      out.append(ts)
+  return out
+
+
 @dataclass
 class DailyRiskSnapshot:
   trade_date: date
@@ -111,6 +151,11 @@ class DailyRiskSnapshot:
   kill_switch: bool
   entries_blocked: bool
   block_reason: str | None = None
+  flip_count: int = 0
+  flips_disabled: bool = False
+  risk_state: RiskState = RiskState.NORMAL
+  losing_trade_timestamps: list = field(default_factory=list)
+  flip_timestamps: list = field(default_factory=list)
 
   @property
   def equity(self) -> Decimal:
@@ -120,6 +165,14 @@ class DailyRiskSnapshot:
   def auto_trade_enabled(self) -> bool:
     return not self.kill_switch and not self.entries_blocked
 
+  @property
+  def losing_trades_last_hour(self) -> int:
+    return len(_ts_within_hour(self.losing_trade_timestamps))
+
+  @property
+  def flips_last_hour(self) -> int:
+    return len(_ts_within_hour(self.flip_timestamps))
+
 
 class RiskEngine:
   def __init__(self, config: AppConfig) -> None:
@@ -128,6 +181,32 @@ class RiskEngine:
 
   def _today_ist(self) -> date:
     return datetime.now(IST).date()
+
+  def evaluate_gates(
+    self,
+    snapshot: DailyRiskSnapshot,
+    *,
+    open_position_count: int = 0,
+    is_flip: bool = False,
+  ) -> CircuitDecision:
+    return evaluate_circuit_breakers(
+      self._risk,
+      CircuitSnapshot(
+        starting_capital=snapshot.starting_capital,
+        realized_pnl=snapshot.realized_pnl,
+        trade_count=snapshot.trade_count,
+        consecutive_losses=snapshot.consecutive_losses,
+        open_position_count=open_position_count,
+        flip_count=snapshot.flip_count,
+        flips_last_hour=snapshot.flips_last_hour,
+        losing_trades_last_hour=snapshot.losing_trades_last_hour,
+        kill_switch=snapshot.kill_switch,
+        entries_blocked=snapshot.entries_blocked,
+        risk_state=snapshot.risk_state,
+        flips_disabled=snapshot.flips_disabled,
+      ),
+      is_flip=is_flip,
+    )
 
   async def ensure_daily_state(self) -> DailyRiskSnapshot:
     capital = account_capital_usd(self._risk)
@@ -139,7 +218,12 @@ class RiskEngine:
         """
         SELECT trade_date, starting_capital, available_capital, deployed_capital,
                realized_pnl, trade_count, consecutive_losses, kill_switch,
-               entries_blocked, block_reason
+               entries_blocked, block_reason,
+               COALESCE(flip_count, 0) AS flip_count,
+               COALESCE(flips_disabled, FALSE) AS flips_disabled,
+               COALESCE(risk_state, 'NORMAL') AS risk_state,
+               COALESCE(losing_trade_timestamps, '{}') AS losing_trade_timestamps,
+               COALESCE(flip_timestamps, '{}') AS flip_timestamps
         FROM daily_risk_state WHERE trade_date = $1
         """,
         today,
@@ -156,6 +240,11 @@ class RiskEngine:
       kill_switch=bool(row["kill_switch"]),
       entries_blocked=bool(row["entries_blocked"]),
       block_reason=row["block_reason"],
+      flip_count=int(row["flip_count"] or 0),
+      flips_disabled=bool(row["flips_disabled"]),
+      risk_state=_parse_risk_state(row["risk_state"]),
+      losing_trade_timestamps=list(row["losing_trade_timestamps"] or []),
+      flip_timestamps=list(row["flip_timestamps"] or []),
     )
 
   async def set_auto_trade(self, enabled: bool) -> DailyRiskSnapshot:
@@ -185,6 +274,8 @@ class RiskEngine:
             """
             UPDATE daily_risk_state SET
               entries_blocked = FALSE,
+              flips_disabled = FALSE,
+              risk_state = 'NORMAL',
               block_reason = NULL,
               updated_at = now()
             WHERE trade_date = $1
@@ -203,6 +294,7 @@ class RiskEngine:
           """
           UPDATE daily_risk_state SET
             entries_blocked = TRUE,
+            risk_state = 'HALTED',
             block_reason = 'auto_trade_off',
             updated_at = now()
           WHERE trade_date = $1
@@ -218,6 +310,96 @@ class RiskEngine:
         )
     return await self.ensure_daily_state()
 
+  async def halt_entries(
+    self,
+    reason: str,
+    *,
+    state: RiskState = RiskState.HALTED,
+    flips_only: bool = False,
+  ) -> DailyRiskSnapshot:
+    """Hard-block entries (or flips only) and journal the transition."""
+    today = self._today_ist()
+    pool = get_pool()
+    import json
+
+    meta = json.dumps(
+      {"reason": reason, "state": state.value, "flips_only": flips_only}
+    )
+    async with pool.acquire() as conn:
+      if flips_only:
+        await conn.execute(
+          """
+          UPDATE daily_risk_state SET
+            flips_disabled = TRUE,
+            updated_at = now()
+          WHERE trade_date = $1
+          """,
+          today,
+        )
+      else:
+        await conn.execute(
+          """
+          UPDATE daily_risk_state SET
+            entries_blocked = TRUE,
+            risk_state = $3,
+            block_reason = $2,
+            updated_at = now()
+          WHERE trade_date = $1
+          """,
+          today,
+          reason,
+          state.value,
+        )
+      await conn.execute(
+        """
+        INSERT INTO system_events (event_type, severity, message, metadata)
+        VALUES ('risk_state_change', 'warning', $1, $2::jsonb)
+        """,
+        f"Risk → {state.value}: {reason}",
+        meta,
+      )
+      await conn.execute(
+        """
+        INSERT INTO notifications (type, severity, title, message)
+        VALUES ('risk', 'warning', $1, $2)
+        """,
+        f"Risk {state.value}",
+        reason,
+      )
+    logger.warning("risk_halt", reason=reason, state=state.value, flips_only=flips_only)
+    return await self.ensure_daily_state()
+
+  async def record_flip(self) -> DailyRiskSnapshot:
+    """Increment flip counters; disable further flips if caps hit."""
+    today = self._today_ist()
+    now = datetime.now(tz=timezone.utc)
+    pool = get_pool()
+    async with pool.acquire() as conn:
+      await conn.execute(
+        """
+        UPDATE daily_risk_state SET
+          flip_count = COALESCE(flip_count, 0) + 1,
+          flip_timestamps = COALESCE(flip_timestamps, '{}') || ARRAY[$2::timestamptz],
+          updated_at = now()
+        WHERE trade_date = $1
+        """,
+        today,
+        now,
+      )
+    snap = await self.ensure_daily_state()
+    max_day = int(self._risk.get("max_flips_per_day") or 0)
+    max_hour = int(self._risk.get("max_flips_per_hour") or 0)
+    if (max_day > 0 and snap.flip_count >= max_day) or (
+      max_hour > 0 and snap.flips_last_hour >= max_hour
+    ):
+      reason = (
+        "max_flips_per_day"
+        if max_day > 0 and snap.flip_count >= max_day
+        else "max_flips_per_hour"
+      )
+      await self.halt_entries(reason, flips_only=True)
+      return await self.ensure_daily_state()
+    return snap
 
   async def size_entry(
     self,
@@ -226,8 +408,17 @@ class RiskEngine:
     snapshot: DailyRiskSnapshot,
     *,
     open_position_count: int = 0,
+    is_flip: bool = False,
+    liquidity_lots: int | None = None,
+    portfolio_positions: list | None = None,
   ) -> EntrySizing:
-    # Delta: quantity is always in lots; lot_size kept at 1 for API compatibility.
+    from algocrypto.risk.portfolio import (
+      build_portfolio_snapshot,
+      evaluate_portfolio_entry,
+    )
+    from algocrypto.risk.sizing import compute_lot_size
+    from algocrypto.symbols_util import underlying_from_tsym
+
     lot_size = 1
     try:
       contract_size = Decimal(str(signal.scanner_metadata.get("contract_size", "0.001")))
@@ -242,43 +433,32 @@ class RiskEngine:
     )
     entry_ltp = option.ltp or Decimal("0")
 
-    def _reject(reason: str, lots: int = 0, premium: Decimal | None = None) -> EntrySizing:
+    def _reject(
+      reason: str,
+      lots: int = 0,
+      premium: Decimal | None = None,
+      breakdown: dict | None = None,
+    ) -> EntrySizing:
       qty = max(lots, 0)
       prem = premium if premium is not None else Decimal("0")
       return EntrySizing(
         False, qty, lot_size, entry_ltp, prem, reason,
         lots=lots, confidence=confidence, contract_size=contract_size,
+        size_breakdown=breakdown, binding_reason=reason,
       )
 
     if entry_ltp <= 0:
       return _reject("invalid_ltp")
 
-    max_daily_loss = Decimal(str(self._risk.get("max_daily_loss", 0)))
-    if max_daily_loss > 0 and snapshot.realized_pnl <= -max_daily_loss:
-      return _reject("max_daily_loss")
+    is_flip = is_flip or signal.setup_type == "trend_reversal_flip"
+    gate = self.evaluate_gates(
+      snapshot, open_position_count=open_position_count, is_flip=is_flip
+    )
+    if not gate.allow_entry:
+      return _reject(gate.reason or "circuit_breaker")
 
-    max_trades = int(self._risk.get("max_trades_per_day", 0))
-    if max_trades > 0 and snapshot.trade_count >= max_trades:
-      return _reject("max_trades_per_day")
-
-    max_concurrent = int(self._risk.get("max_concurrent_positions", 0))
-    if max_concurrent > 0 and open_position_count >= max_concurrent:
-      return _reject("max_concurrent_positions")
-
-    max_consec = int(self._risk.get("max_consecutive_losses", 0))
-    if max_consec > 0 and snapshot.consecutive_losses >= max_consec:
-      return _reject("max_consecutive_losses")
-
-    if snapshot.kill_switch or snapshot.entries_blocked:
-      return _reject("entries_blocked")
-
-    max_premium_pct = Decimal(str(self._risk.get("max_premium_pct_of_available", 85)))
-    max_for_trade = snapshot.available_capital * max_premium_pct / Decimal("100")
-    max_deployed_pct = Decimal(str(self._risk.get("max_deployed_pct_of_equity", 85)))
-    deploy_cap = snapshot.equity * max_deployed_pct / Decimal("100")
-    deploy_room = deploy_cap - snapshot.deployed_capital
-
-    lots, premium = fit_lots_to_capital(
+    exit_cfg = getattr(self._config, "position_exit", None) or {}
+    breakdown = compute_lot_size(
       self._risk,
       confidence=confidence,
       entry_ltp=entry_ltp,
@@ -286,31 +466,82 @@ class RiskEngine:
       available=snapshot.available_capital,
       deployed=snapshot.deployed_capital,
       equity=snapshot.equity,
+      exit_cfg=exit_cfg,
+      liquidity_lots=liquidity_lots,
     )
-    target_lots = lots_for_confidence(self._risk, confidence)
-    if lots < 1:
-      premium_req = premium_usd(price=entry_ltp, lots=max(target_lots, 1), size=contract_size)
-      reason = "insufficient_capital"
-      if premium_req > max_for_trade:
-        reason = "premium_pct_exceeded"
-      elif premium_req > deploy_room:
-        reason = "deployed_cap_exceeded"
-      return _reject(reason, lots=target_lots, premium=premium_req)
+    bd = {
+      "confidence_lots": breakdown.confidence_lots,
+      "risk_lots": breakdown.risk_lots,
+      "capital_lots": breakdown.capital_lots,
+      "liquidity_lots": breakdown.liquidity_lots,
+      "max_lots": breakdown.max_lots,
+      "final_lots": breakdown.final_lots,
+      "binding_reason": breakdown.binding_reason,
+      "limits": breakdown.limits,
+      "notes": breakdown.notes,
+    }
 
-    quantity = lots  # qty = Delta lots
+    if breakdown.final_lots < 1:
+      return _reject(
+        breakdown.binding_reason or "insufficient_capital",
+        lots=breakdown.confidence_lots,
+        premium=premium_usd(
+          price=entry_ltp, lots=max(breakdown.confidence_lots, 1), size=contract_size
+        ),
+        breakdown=bd,
+      )
+
+    lots = breakdown.final_lots
+    premium = premium_usd(price=entry_ltp, lots=lots, size=contract_size)
+
+    # Portfolio exposure gate (after size known)
+    und = str(
+      signal.scanner_metadata.get("underlying")
+      or underlying_from_tsym(signal.tsym)
+      or "BTC"
+    )
+    port_snap = build_portfolio_snapshot(portfolio_positions or [])
+    delta = None
+    pick = (signal.scanner_metadata or {}).get("strike_pick") or {}
+    if isinstance(pick, dict) and pick.get("delta") is not None:
+      try:
+        delta = float(pick["delta"]) * lots
+      except (TypeError, ValueError):
+        delta = None
+    port_dec = evaluate_portfolio_entry(
+      self._risk,
+      snapshot=port_snap,
+      equity=snapshot.equity,
+      new_underlying=und,
+      new_side=signal.side,
+      new_premium=premium,
+      new_delta=delta,
+    )
+    if not port_dec.allow:
+      bd["portfolio"] = port_dec.details
+      return _reject(
+        port_dec.reason or "portfolio_exposure_limit",
+        lots=lots,
+        premium=premium,
+        breakdown=bd,
+      )
+
     logger.info(
       "entry_sized",
       confidence=confidence,
-      target_lots=target_lots,
       lots=lots,
-      quantity=quantity,
+      quantity=lots,
       contract_size=str(contract_size),
       premium_usd=str(premium),
-      deploy_room=str(deploy_room),
+      binding_reason=breakdown.binding_reason,
+      size_breakdown=bd,
+      risk_state=gate.state.value,
+      warnings=list(gate.warning_reasons),
     )
     return EntrySizing(
-      True, quantity, lot_size, entry_ltp, premium, None,
+      True, lots, lot_size, entry_ltp, premium, None,
       lots=lots, confidence=confidence, contract_size=contract_size,
+      size_breakdown=bd, binding_reason=breakdown.binding_reason,
     )
 
   async def reserve_capital(self, premium: Decimal) -> None:
@@ -331,30 +562,65 @@ class RiskEngine:
 
   async def release_capital(self, premium: Decimal, pnl: Decimal) -> None:
     today = self._today_ist()
+    now = datetime.now(tz=timezone.utc)
     pool = get_pool()
     async with pool.acquire() as conn:
-      await conn.execute(
-        """
-        UPDATE daily_risk_state SET
-            deployed_capital = GREATEST(deployed_capital - $2, 0),
-            available_capital = available_capital + $2 + $3,
-            realized_pnl = realized_pnl + $3,
-            trade_count = trade_count + 1,
-            consecutive_losses = CASE WHEN $3 < 0 THEN consecutive_losses + 1 ELSE 0 END,
-            updated_at = now()
-        WHERE trade_date = $1
-        """,
-        today,
-        premium,
-        pnl,
-      )
+      if pnl < 0:
+        await conn.execute(
+          """
+          UPDATE daily_risk_state SET
+              deployed_capital = GREATEST(deployed_capital - $2, 0),
+              available_capital = available_capital + $2 + $3,
+              realized_pnl = realized_pnl + $3,
+              trade_count = trade_count + 1,
+              consecutive_losses = consecutive_losses + 1,
+              losing_trade_timestamps =
+                COALESCE(losing_trade_timestamps, '{}') || ARRAY[$4::timestamptz],
+              updated_at = now()
+          WHERE trade_date = $1
+          """,
+          today,
+          premium,
+          pnl,
+          now,
+        )
+      else:
+        await conn.execute(
+          """
+          UPDATE daily_risk_state SET
+              deployed_capital = GREATEST(deployed_capital - $2, 0),
+              available_capital = available_capital + $2 + $3,
+              realized_pnl = realized_pnl + $3,
+              trade_count = trade_count + 1,
+              consecutive_losses = 0,
+              updated_at = now()
+          WHERE trade_date = $1
+          """,
+          today,
+          premium,
+          pnl,
+        )
+
+    snap = await self.ensure_daily_state()
+    halt_reason = post_trade_halt_reason(
+      self._risk,
+      starting_capital=snap.starting_capital,
+      realized_pnl_after=snap.realized_pnl,
+      trade_count_after=snap.trade_count,
+      consecutive_losses_after=snap.consecutive_losses,
+      losing_trades_last_hour=snap.losing_trades_last_hour,
+    )
+    if halt_reason:
+      await self.halt_entries(halt_reason, state=RiskState.HALTED)
+      if halt_reason == "daily_loss_limit" and bool(
+        self._risk.get("emergency_flatten_on_daily_loss", False)
+      ):
+        await self.halt_entries(
+          "daily_loss_limit_emergency",
+          state=RiskState.EMERGENCY_FLATTEN,
+        )
 
   async def reconcile_margin(self, open_deployed: Decimal) -> DailyRiskSnapshot:
-    """Force used margin to match live open premiums.
-
-    Invariant: available + deployed = starting + realized_pnl
-    When no holdings, deployed must be 0 and available = starting + realized.
-    """
     today = self._today_ist()
     deployed = max(Decimal("0"), open_deployed)
     pool = get_pool()
@@ -376,7 +642,6 @@ class RiskEngine:
     return await self.ensure_daily_state()
 
   def is_force_exit_time(self) -> bool:
-    """NSE-style daily flatten. Disabled when force_exit_time is null/empty (crypto 24×7)."""
     force = self._risk.get("force_exit_time", None)
     if force in (None, "", False, "null", "none", "None"):
       return False

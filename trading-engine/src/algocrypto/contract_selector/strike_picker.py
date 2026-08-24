@@ -116,9 +116,10 @@ def select_option_contract(
     if state.spread_pct is not None and state.spread_pct > max_spread:
       continue
 
-    delta = gamma = iv = None
+    delta = gamma = iv = theta = None
     score = 0.0
     reason = "ltp_fallback"
+    tte_mins = None
     if exp is not None and spot > 0:
       g = compute_greeks(
         spot=float(spot),
@@ -131,9 +132,12 @@ def select_option_contract(
       delta = g.delta
       gamma = g.gamma
       iv = g.iv
+      theta = g.theta
+      from algocrypto.option_data.vol_model import minutes_to_expiry
+
+      tte_mins = minutes_to_expiry(exp, now=now)
       if delta is not None:
         abs_d = abs(delta)
-        # Prefer |delta| near target (ATM-ish directional).
         if delta_min <= abs_d <= delta_max:
           score += 40.0 - abs(abs_d - target_delta) * 80.0
           reason = "delta_in_band"
@@ -141,11 +145,28 @@ def select_option_contract(
           score += 10.0 - abs(abs_d - target_delta) * 40.0
           reason = "delta_out_of_band"
       if prefer_gamma and gamma is not None:
-        score += min(gamma * 5000.0, 25.0)  # weekly gamma is small
-      # Prefer closer to ATM slightly when scores tie.
+        score += min(gamma * 5000.0, 25.0)
       atm = universe.atm_strike or inst.strike
       steps_away = abs(float(inst.strike - atm)) / float(step)
       score += max(0.0, 8.0 - steps_away * 3.0)
+
+      # Phase 5: vol / TTE aware adjustments
+      if bool(cfg.get("vol_aware", True)):
+        if iv is not None:
+          # Prefer moderate IV for long premium (not extreme)
+          if 0.25 <= iv <= 0.85:
+            score += 8.0
+            reason = reason + "+iv_ok"
+          elif iv > 1.0:
+            score -= 12.0
+            reason = reason + "+iv_rich"
+        if theta is not None and tte_mins is not None and tte_mins < 120:
+          # Penalize high theta burn near expiry
+          score -= min(abs(theta) * 2.0, 15.0)
+          reason = reason + "+tte_theta"
+        if tte_mins is not None and tte_mins < 30:
+          score -= 20.0
+          reason = reason + "+near_expiry"
     if state.spread_pct is not None:
       score += max(0.0, 10.0 - float(state.spread_pct))
     if state.volume:
@@ -173,14 +194,23 @@ def select_option_contract(
 
 
 def pick_meta(pick: StrikePick) -> dict[str, Any]:
+  from algocrypto.option_data.vol_model import expiry_bucket, minutes_to_expiry
+
+  exp = pick.instrument.expiry_date
+  exp_d = exp.date() if exp is not None else None
+  mins = minutes_to_expiry(exp_d)
   return {
     "strike": float(pick.instrument.strike),
     "tsym": pick.instrument.tsym,
     "token": pick.instrument.token,
     "score": round(pick.score, 2),
+    "selection_score": round(pick.score, 2),
+    "selection_reason": pick.reason,
     "delta": round(pick.delta, 4) if pick.delta is not None else None,
     "gamma": round(pick.gamma, 6) if pick.gamma is not None else None,
     "iv": round(pick.iv * 100, 2) if pick.iv is not None else None,
     "pick_reason": pick.reason,
     "candidates_considered": pick.candidates_considered,
+    "time_to_expiry_minutes": round(mins, 1) if mins is not None else None,
+    "expiry_bucket": expiry_bucket(mins).value,
   }

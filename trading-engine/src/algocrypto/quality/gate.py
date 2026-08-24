@@ -269,6 +269,40 @@ class QualityGate:
         adj = int(round(conf * mult))
         logs.append(f"learner_mult={mult:.2f} conf {conf}->{adj}")
         conf = adj
+      # Phase 7: soft demote on weak health (min sample already enforced in learner)
+      try:
+        snap = self._learner.snapshot()
+        st = (snap.get("stats") or {}).get(signal.setup_type) or {}
+        if st.get("health_label") == "weak":
+          health_mult = float(
+            (self._config.strategy.get("strategy_health") or {}).get(
+              "demote_weak_multiplier", 0.85
+            )
+          )
+          adj = int(round(conf * health_mult))
+          logs.append(f"health_weak={st.get('health_score')} conf {conf}->{adj}")
+          conf = adj
+      except Exception:
+        pass
+
+    # Phase 5: soft IV regime × setup quality (never hard-reject alone)
+    from algocrypto.option_data.vol_model import IVRegime, iv_setup_quality
+    from algocrypto.strategy.families import strategy_family
+
+    iv_reg_raw = ctx.get("iv_regime") or extra.get("iv_regime")
+    try:
+      iv_reg = IVRegime(iv_reg_raw) if iv_reg_raw else IVRegime.IV_UNKNOWN
+    except ValueError:
+      iv_reg = IVRegime.IV_UNKNOWN
+    iv_adj, iv_why = iv_setup_quality(
+      regime=iv_reg,
+      setup_family=strategy_family(signal.setup_type),
+      iv_rank=ctx.get("iv_rank") if ctx.get("iv_rank") is not None else extra.get("iv_rank"),
+      cfg=self._config.strategy.get("vol_model") or {},
+    )
+    if iv_adj:
+      conf = max(0, min(100, conf + iv_adj))
+      logs.append(f"iv_setup_quality={iv_adj} ({iv_why})")
 
     # Persist component breakdown on signal metadata for §16 JSON mapping
     signal.scanner_metadata = {
@@ -283,6 +317,9 @@ class QualityGate:
       "theta_score": components["theta"],
       "iv_score": components["vega_iv"],
       "spread_score": components["spread"],
+      "iv_setup_adj": iv_adj,
+      "iv_setup_reason": iv_why,
+      "strategy_family": strategy_family(signal.setup_type),
     }
 
     logs.append(f"total={conf}")

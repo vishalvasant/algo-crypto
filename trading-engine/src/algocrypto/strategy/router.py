@@ -17,6 +17,7 @@ from algocrypto.models.events import (
 )
 from algocrypto.quality.gate import QualityGate
 from algocrypto.scanner.base import StrategyScanner
+from algocrypto.strategy.families import strategy_family
 
 logger = structlog.get_logger(__name__)
 
@@ -125,8 +126,25 @@ class StrategyRouter:
     self,
     signal: CandidateSignal,
     option: OptionState | dict[str, OptionState | None] | None,
+    features: FeatureSnapshot | None = None,
   ) -> dict:
-    return _score_context_from_option(signal, option)
+    ctx = _score_context_from_option(signal, option)
+    if features is not None:
+      extra = features.extra or {}
+      for k in (
+        "iv_regime",
+        "iv_rank",
+        "iv_percentile",
+        "realized_vol",
+        "expected_move",
+        "expiry_bucket",
+        "time_to_expiry_minutes",
+      ):
+        if extra.get(k) is not None and k not in ctx:
+          ctx[k] = extra[k]
+      if extra.get("option_iv") is not None and "iv" not in ctx:
+        ctx["iv"] = extra["option_iv"]
+    return ctx
 
   def route(
     self,
@@ -151,6 +169,8 @@ class StrategyRouter:
       "setup_trend": (features.extra or {}).get("setup_vwap_trend"),
       "skip_reasons": (features.extra or {}).get("skip_reasons"),
       "candle_counts": (features.extra or {}).get("candle_counts"),
+      "iv_regime": (features.extra or {}).get("iv_regime"),
+      "expiry_bucket": (features.extra or {}).get("expiry_bucket"),
     }
 
     if not regime.trade_allowed:
@@ -175,15 +195,20 @@ class StrategyRouter:
     best_conf = -1
     best_name = "NO_TRADE"
     best_logs: list[str] = []
+    # Phase 7: only the best member of each family competes as independent evidence
+    best_by_family: dict[str, tuple[int, CandidateSignal, str, list[str]]] = {}
 
     for scanner in self._scanners:
       option = options_by_strategy.get(scanner.name)
       signal = scanner.scan(features, universe, option)
+      fam = strategy_family(scanner.name)
       if signal is None:
         reason = _diagnose_no_signal(scanner.name, features, option)
         scores.append(
           {
             "strategy": scanner.name,
+            "strategy_family": fam,
+            "correlated_signal_group": fam,
             "compatible": False,
             "confidence": 0,
             "reason": reason,
@@ -196,7 +221,7 @@ class StrategyRouter:
         signal,
         features,
         regime,
-        context=self._score_context(signal, option),
+        context=self._score_context(signal, option, features),
       )
       signal.confidence = conf
       signal.scanner_metadata = {
@@ -204,9 +229,13 @@ class StrategyRouter:
         "confidence": conf,
         "confidence_logs": conf_logs,
         "regime_primary": regime.primary,
+        "strategy_family": fam,
+        "correlated_signal_group": fam,
       }
       entry = {
         "strategy": scanner.name,
+        "strategy_family": fam,
+        "correlated_signal_group": fam,
         "compatible": True,
         "confidence": conf,
         "side": signal.side,
@@ -215,12 +244,18 @@ class StrategyRouter:
         "logs": conf_logs,
       }
       scores.append(entry)
-      logs.append(f"{scanner.name}: confidence={conf}")
+      logs.append(f"{scanner.name}[{fam}]: confidence={conf}")
 
+      prev = best_by_family.get(fam)
+      if prev is None or conf > prev[0]:
+        best_by_family[fam] = (conf, signal, scanner.name, conf_logs)
+
+    # Select across families (correlated same-family signals collapse to one)
+    for fam, (conf, signal, name, conf_logs) in best_by_family.items():
       if conf > best_conf:
         best_conf = conf
         best_signal = signal
-        best_name = scanner.name
+        best_name = name
         best_logs = conf_logs
 
     if best_signal is None or best_conf < self._min_confidence:
@@ -250,11 +285,29 @@ class StrategyRouter:
       )
       return decision, None
 
-    rivals = [s for s in scores if s.get("compatible") and s["strategy"] != best_name]
+    rivals = [
+      s
+      for s in scores
+      if s.get("compatible")
+      and s["strategy"] != best_name
+      and s.get("strategy_family") != strategy_family(best_name)
+    ]
     if rivals:
       second = max((s.get("confidence") or 0) for s in rivals)
       if second == best_conf:
         warnings.append("confidence_tie_prefer_first_registered")
+    same_fam = [
+      s
+      for s in scores
+      if s.get("compatible")
+      and s["strategy"] != best_name
+      and s.get("strategy_family") == strategy_family(best_name)
+    ]
+    if same_fam:
+      warnings.append(
+        f"correlated_family_collapsed={strategy_family(best_name)}:"
+        + ",".join(s["strategy"] for s in same_fam)
+      )
 
     decision = StrategyDecision(
       ts=now,
@@ -263,8 +316,8 @@ class StrategyRouter:
       trade_allowed=True,
       position_side=best_signal.side,
       selected_reason=(
-        f"selected {best_name} confidence={best_conf} "
-        f"regime={regime.primary} risk={regime.risk_score}"
+        f"selected {best_name}[{strategy_family(best_name)}] "
+        f"confidence={best_conf} regime={regime.primary} risk={regime.risk_score}"
       ),
       regime=regime,
       strategy_scores=scores,
@@ -275,6 +328,7 @@ class StrategyRouter:
     logger.info(
       "strategy_routed",
       strategy=best_name,
+      family=strategy_family(best_name),
       confidence=best_conf,
       side=best_signal.side,
       tsym=best_signal.tsym,

@@ -7,3 +7,10 @@ backtest_exit_interval_seconds: 2
 rest_quote_poll_interval_seconds: 30
 rest_quote_poll_interval_market_seconds: 2
 watchlist_stream_interval_ms: 750
+
+# Gap-Fix Phase 1.2 — data freshness safety
+safety:
+  quote_stale_soft_seconds: 30
+  quote_stale_hard_seconds: 90
+  candle_stale_hard_seconds: 180
+  block_entries_when_degraded: true

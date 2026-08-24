@@ -42,6 +42,11 @@ regime:
   opening_phase_minutes: 30
   late_phase_after_minutes: 330
 
+# Gap-Fix Phase 2: ATR-relative VWAP dead zone → NEUTRAL bias (no CE/PE flicker).
+vwap_bias:
+  atr_lookback_bars: 14
+  dead_zone_atr_multiplier: 0.25
+
 vwap_reclaim:
   bias_timeframe: 5m
   setup_timeframe: 3m
@@ -76,3 +81,33 @@ strike_selection:
   delta_max: 0.65
   prefer_higher_gamma: true
   max_spread_pct: 8
+  vol_aware: true  # Gap-Fix Phase 5: IV/TTE score adjustments
+
+# Gap-Fix Phase 5 — IV regime / RV / TTE
+vol_model:
+  iv_slope_lookback: 10
+  iv_expand_threshold: 0.02
+  iv_contract_threshold: -0.02
+  rv_lookback_bars: 60
+  iv_expensive_rank: 80
+  tte_adjustments:
+    ">12h": { size_mult: 1.0, min_confidence_add: 0, max_hold_mult: 1.0 }
+    "4-12h": { size_mult: 1.0, min_confidence_add: 0, max_hold_mult: 1.0 }
+    "1-4h": { size_mult: 0.75, min_confidence_add: 5, max_hold_mult: 0.7 }
+    "30m-1h": { size_mult: 0.5, min_confidence_add: 10, max_hold_mult: 0.4 }
+    "<30m": { size_mult: 0.25, min_confidence_add: 15, max_hold_mult: 0.25 }
+
+# Gap-Fix Phase 6 — Expected value gate (does NOT map rule_score → P(win))
+ev_engine:
+  enabled: true
+  min_ev: 0.0
+  adverse_pct: 0.12
+  reward_pct: 0.18
+  min_trades_for_pwin: 8
+  prior_pwin: 0.45
+  assumed_fee_pct_of_premium: 0.02
+
+# Gap-Fix Phase 7 — strategy family / health
+strategy_health:
+  min_trades: 10
+  demote_weak_multiplier: 0.85

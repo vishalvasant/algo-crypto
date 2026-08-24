@@ -50,7 +50,6 @@ class EnvSettings(BaseSettings):
     )
     config_dir: str = Field(default="./config", alias="CONFIG_DIR")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
-    redis_url: str | None = Field(default=None, alias="REDIS_URL")
 
     delta_api_key: str | None = Field(default=None, alias="DELTA_API_KEY")
     delta_api_secret: str | None = Field(default=None, alias="DELTA_API_SECRET")

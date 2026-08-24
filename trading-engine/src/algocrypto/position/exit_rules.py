@@ -25,6 +25,7 @@ def evaluate_momentum_exit(
   force_exit: bool,
   regime_primary: str | None = None,
   now: datetime | None = None,
+  atr: Decimal | None = None,
 ) -> ExitDecision:
   if force_exit:
     return ExitDecision(True, "force_exit")
@@ -43,12 +44,14 @@ def evaluate_momentum_exit(
   if entry_price <= 0 or current_ltp <= 0:
     return ExitDecision(False)
 
-  # Trend / bias reversal — exit without waiting for a profit target.
-  # Buffer avoids tick-noise flips right at VWAP (institutional §14 hardening).
+  # Trend / bias reversal — prefer ATR-relative buffer; fall back to fixed points.
   if cfg.get("bias_flip_exit", True):
     spot = market_data.spot_ltp
     vwap = market_data.session_vwap_value
-    buffer = Decimal(str(cfg.get("bias_flip_buffer_points", 0)))
+    if atr is not None and atr > 0 and cfg.get("bias_flip_atr_multiplier") is not None:
+      buffer = atr * Decimal(str(cfg.get("bias_flip_atr_multiplier", 0.35)))
+    else:
+      buffer = Decimal(str(cfg.get("bias_flip_buffer_points", 0)))
     if spot is not None and vwap is not None:
       if option_side == "CE" and spot < (vwap - buffer):
         return ExitDecision(True, "trend_reversal")
@@ -64,6 +67,19 @@ def evaluate_momentum_exit(
   trail_default = 30 if high_vol else 40
 
   adverse_pct = Decimal(str(cfg.get(adverse_key, adverse_default))) / Decimal("100")
+  # Phase 6: soft ATR scale — high spot ATR → slightly wider adverse room
+  if (
+    bool(cfg.get("dynamic_exits_enabled", True))
+    and atr is not None
+    and atr > 0
+  ):
+    spot = market_data.spot_ltp
+    if spot is not None and spot > 0:
+      atr_frac = float(atr / spot)
+      cap = float(cfg.get("dynamic_adverse_atr_scale_cap", 0.35))
+      scale = Decimal(str(1.0 + min(cap, atr_frac * 80.0)))
+      adverse_pct = adverse_pct * scale
+
   if current_ltp <= entry_price * (Decimal("1") - adverse_pct):
     return ExitDecision(True, "adverse_momentum")
 

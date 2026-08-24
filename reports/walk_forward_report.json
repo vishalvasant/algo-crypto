@@ -1,0 +1,57 @@
+{
+  "days_available": [
+    "2026-07-15",
+    "2026-07-16"
+  ],
+  "train_size": 1,
+  "test_size": 1,
+  "folds": [
+    {
+      "train_days": [
+        "2026-07-15"
+      ],
+      "test_days": [
+        "2026-07-16"
+      ],
+      "in_sample": {
+        "days": 1,
+        "trades": 19,
+        "wins": 8,
+        "win_rate": 0.42105263157894735,
+        "pnl": 5435.67,
+        "avg_pnl_per_day": 5435.67
+      },
+      "out_of_sample": {
+        "days": 1,
+        "trades": 19,
+        "wins": 7,
+        "win_rate": 0.3684210526315789,
+        "pnl": 2329.38,
+        "avg_pnl_per_day": 2329.38
+      }
+    }
+  ],
+  "aggregate_oos": {
+    "days": 1,
+    "trades": 19,
+    "wins": 7,
+    "win_rate": 0.3684210526315789,
+    "pnl": 2329.38,
+    "avg_pnl_per_day": 2329.38
+  },
+  "per_day": {
+    "2026-07-15": {
+      "trades": 19,
+      "wins": 8,
+      "pnl": 5435.668333333333,
+      "win_rate": 0.4211
+    },
+    "2026-07-16": {
+      "trades": 19,
+      "wins": 7,
+      "pnl": 2329.383333333333,
+      "win_rate": 0.3684
+    }
+  },
+  "note": "Built from existing reports/backtest_*.json (NIFTY Flattrade day replays, pre Gap-Fix Phases 5\u20138). No reports/snaps/ present for crypto Delta walk-forward."
+}

@@ -11,9 +11,11 @@ from algocrypto.features.indicators import (
   opening_range,
 )
 from algocrypto.features.setups import detect_all_setups
+from algocrypto.market_data.atr import approx_atr
 from algocrypto.market_data.engine import MarketDataEngine
 from algocrypto.market_data.vwap import session_vwap
 from algocrypto.models.events import Bias, Candle, CandleInterval, FeatureSnapshot
+from algocrypto.position.reversal_confirm import bias_with_dead_zone
 
 
 class FeatureEngine:
@@ -22,6 +24,7 @@ class FeatureEngine:
     self._market_data = market_data
     self._reclaim = config.strategy.get("vwap_reclaim", {})
     self._pullback = config.strategy.get("vwap_pullback", {})
+    self._vwap_bias = config.strategy.get("vwap_bias", {})
     # Prior day OHLC for CPR / PDH / PDL / gap (set by orchestrator/backtest).
     self.prior_high: Decimal | None = None
     self.prior_low: Decimal | None = None
@@ -56,15 +59,19 @@ class FeatureEngine:
       spot = m1[-1].close
 
     # Structural bias from last 1m close so setups/triggers (candle-based)
-    # stay aligned with bias. Live LTP alone caused reclaim_side_mismatch
-    # (PE setups visible while live spot already flipped above VWAP).
+    # stay aligned with bias. ATR dead zone avoids BULLISH↔BEARISH flicker
+    # when spot chatters around VWAP (Gap-Fix Phase 2).
     price_for_bias = m1[-1].close if m1 else spot
     bias = Bias.NEUTRAL
+    atr = approx_atr(m1, int(self._vwap_bias.get("atr_lookback_bars", 14)))
+    dead_mult = Decimal(str(self._vwap_bias.get("dead_zone_atr_multiplier", 0.25)))
     if vwap and price_for_bias is not None:
-      if price_for_bias > vwap:
-        bias = Bias.BULLISH
-      elif price_for_bias < vwap:
-        bias = Bias.BEARISH
+      bias = bias_with_dead_zone(
+        price=price_for_bias,
+        vwap=vwap,
+        atr=atr,
+        dead_zone_atr_mult=dead_mult,
+      )
 
     lookback = int(self._reclaim.get("setup_lookback_bars", 5))
     max_dist = Decimal(str(self._reclaim.get("max_distance_to_vwap_points", 15)))
@@ -166,6 +173,12 @@ class FeatureEngine:
       "spread_pct": opt_ctx.get("spread_pct"),
       "option_oi": opt_ctx.get("oi"),
       "option_volume": opt_ctx.get("volume"),
+      "iv_regime": opt_ctx.get("iv_regime"),
+      "iv_rank": opt_ctx.get("iv_rank"),
+      "realized_vol": opt_ctx.get("realized_vol"),
+      "expected_move": opt_ctx.get("expected_move"),
+      "time_to_expiry_minutes": opt_ctx.get("time_to_expiry_minutes"),
+      "expiry_bucket": opt_ctx.get("expiry_bucket"),
     }
 
     existing = {
@@ -240,6 +253,17 @@ class FeatureEngine:
       "pdl": float(self.prior_low) if self.prior_low is not None else None,
       "gap_points": gap_points,
       "option_vwap": opt_ctx.get("option_vwap"),
+      "option_iv": opt_ctx.get("iv"),
+      "option_iv_change": opt_ctx.get("iv_change"),
+      "iv_regime": opt_ctx.get("iv_regime"),
+      "iv_rank": opt_ctx.get("iv_rank"),
+      "iv_percentile": opt_ctx.get("iv_percentile"),
+      "realized_vol": opt_ctx.get("realized_vol"),
+      "iv_vs_rv": opt_ctx.get("iv_vs_rv"),
+      "expected_move": opt_ctx.get("expected_move"),
+      "time_to_expiry_minutes": opt_ctx.get("time_to_expiry_minutes"),
+      "expiry_bucket": opt_ctx.get("expiry_bucket"),
+      "vol_unavailable": opt_ctx.get("vol_unavailable"),
       "chain": self.chain_snapshot,
       "strategy_setups": strategy_setups,
       "active_setups": active,

@@ -1,22 +1,63 @@
+# Risk & circuit breakers (Gap-Fix Phase 1) + risk sizing / portfolio (Phase 4)
+# 0 = disabled for a given gate. Documented defaults — not silent.
+
 account_capital_usd: 250
-# Per-trade and total deploy caps — utilize up to 85% of capital/equity.
-max_premium_pct_of_available: 85
-max_deployed_pct_of_equity: 85
-max_concurrent_positions: 0
+
+# Per-trade / book deploy caps (lowered from 85% after paper wipeout).
+max_premium_pct_of_available: 40
+max_deployed_pct_of_equity: 50
+max_exposure_pct: 50
+max_premium_deployed_pct: 40
+
+# Concurrent positions (alias: max_positions)
+max_concurrent_positions: 2
+max_positions: 2
+
+# --- Hard circuit breakers ---
+daily_loss_limit_amount: 40
+daily_loss_limit_pct: 20
 max_daily_loss: 0
-max_consecutive_losses: 0
-max_trades_per_day: 0
+
+max_consecutive_losses: 4
+max_trades_per_day: 20
+max_losing_trades_per_hour: 8
+
+max_flips_per_day: 6
+max_flips_per_hour: 3
+
+consecutive_loss_cooldown_minutes: 60
 cooldown_after_exit_minutes: 5
-# Crypto is 24×7 — no NSE-style daily force flat.
 force_exit_time: null
+
+emergency_flatten_on_daily_loss: false
+emergency_flatten_on_kill_switch: true
+
+# --- Phase 4: risk-based sizing ---
+# Per-trade max loss budget (USD). Prefer amount; else pct of equity.
+max_loss_per_trade_amount: 12
+max_loss_per_trade_pct: 5
+# Adverse premium move assumption for risk lots (else position_exit adverse %)
+expected_adverse_move_pct: 12
+
+# --- Phase 4: portfolio exposure ---
+portfolio:
+  max_underlying_exposure_pct: 35
+  max_combined_exposure_pct: 50
+  max_directional_exposure_pct: 40
+  # BTC CE + ETH CE (same side) treated as correlated
+  max_correlated_directional_pct: 45
+  btc_eth_correlation: 0.7
+  # 0 = disabled
+  max_abs_net_delta: 0
+
 default_lots: 10
 confidence_lot_sizing:
   enabled: true
-  max_lots: 120
+  max_lots: 60
   tiers:
     - min_confidence: 90
-      lots: 80
-    - min_confidence: 80
       lots: 40
+    - min_confidence: 80
+      lots: 25
     - min_confidence: 70
-      lots: 20
+      lots: 15
