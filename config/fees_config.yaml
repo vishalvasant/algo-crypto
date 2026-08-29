@@ -1,8 +1,7 @@
 # Delta India options fee model (paper + live estimation).
-# Docs: fees on notional, capped at % of premium; +18% GST.
-# Product API often reports taker/maker ~0.0001 (0.01%); marketing tables also list 0.03%.
-# Prefer live product rates when available; these are fallbacks.
-options_taker_rate: 0.0001
+# Official: https://www.delta.exchange/fees · https://www.delta.exchange/support/solutions/articles/80001177864
+# Options: taker 0.03% of notional, maker 0.01%; capped at 3.5% of premium; +18% GST on fee.
+options_taker_rate: 0.0003
 options_maker_rate: 0.0001
 premium_fee_cap_pct: 3.5
 gst_pct: 18.0
@@ -10,6 +9,9 @@ gst_pct: 18.0
 assume_role: taker
 # Long options at 100x: capital locked ≈ full premium (not underlying/leverage).
 long_option_leverage: 100
+# Contract sizes (1 lot = underlying units) — BTC 0.001, ETH 0.01 per Delta docs.
+contract_size_btc: 0.001
+contract_size_eth: 0.01
 # Orderbook gates (buy CE/PE)
 orderbook:
   enabled: true

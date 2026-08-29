@@ -71,6 +71,53 @@ class MarketDataEngine:
     def candles(self, interval: CandleInterval) -> list[Candle]:
         return list(self._candles[interval])
 
+    @staticmethod
+    def merge_candles(*series: list[Candle]) -> list[Candle]:
+        by_ts: dict[datetime, Candle] = {}
+        for candles in series:
+            for candle in candles:
+                by_ts[candle.ts] = candle
+        return sorted(by_ts.values(), key=lambda c: c.ts)
+
+    async def candles_from_db(
+        self,
+        token: str,
+        interval: CandleInterval,
+        start: datetime,
+        end: datetime,
+    ) -> list[Candle]:
+        from algocrypto.db.connection import get_pool
+
+        table = self.candle_table(interval)
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT ts, open, high, low, close, volume
+                FROM {table}
+                WHERE instrument_token = $1 AND ts >= $2 AND ts <= $3
+                ORDER BY ts
+                """,
+                token,
+                start,
+                end,
+            )
+        out: list[Candle] = []
+        for row in rows:
+            out.append(
+                Candle(
+                    instrument_token=token,
+                    ts=row["ts"],
+                    open=Decimal(str(row["open"])),
+                    high=Decimal(str(row["high"])),
+                    low=Decimal(str(row["low"])),
+                    close=Decimal(str(row["close"])),
+                    volume=row["volume"],
+                    interval=interval,
+                )
+            )
+        return out
+
     def latest_candle_ts(self, interval: CandleInterval = CandleInterval.M1) -> datetime | None:
         rows = self._candles.get(interval) or []
         if not rows:

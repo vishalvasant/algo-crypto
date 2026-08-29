@@ -304,6 +304,75 @@ async def watchlist() -> dict[str, Any]:
     return snapshot
 
 
+@app.get("/chart/candles")
+async def chart_candles(
+    underlying: str = "BTC",
+    interval: str = "5m",
+    days: int = 30,
+    token: str | None = None,
+    exchange: str | None = None,
+    tsym: str | None = None,
+) -> dict[str, Any]:
+    """OHLC for dashboard chart (1m / 3m / 5m). Pass token for option contract charts."""
+    if _engine_app is None:
+        return {"underlying": underlying.upper(), "interval": interval, "bars": []}
+    iv = interval.lower().strip()
+    if iv in ("1m", "1"):
+        bar_minutes = 1
+    elif iv in ("3m", "3"):
+        bar_minutes = 3
+    else:
+        bar_minutes = 5
+    days_n = max(1, min(days, 30))
+    tok = (token or "").strip()
+    if tok:
+        return await _engine_app.get_instrument_chart_bars(
+            tok,
+            exchange=(exchange or "DELTA").strip().upper() or "DELTA",
+            tsym=(tsym or "").strip() or None,
+            underlying=underlying,
+            minutes=bar_minutes,
+            days=days_n,
+        )
+    return _engine_app.get_underlying_chart_bars(
+        underlying,
+        minutes=bar_minutes,
+    )
+
+
+@app.get("/positions/stream")
+async def positions_stream() -> StreamingResponse:
+    """SSE stream of open positions for cockpit position panel."""
+
+    async def generate():
+        cfg = get_config()
+        interval_ms = int(cfg.runtime.get("position_stream_interval_ms", 500))
+        interval = max(0.1, interval_ms / 1000.0)
+        while True:
+            if _engine_app is None:
+                payload = {"open_positions": [], "feed_mode": "offline"}
+            else:
+                snap = _engine_app.get_watchlist_snapshot()
+                payload = {
+                    "open_positions": snap.get("open_positions", []),
+                    "feed_mode": snap.get("feed_mode"),
+                    "ws_open": snap.get("ws_open"),
+                    "ts": datetime.now(tz=timezone.utc).isoformat(),
+                }
+            yield f"data: {json.dumps(payload, default=str)}\n\n"
+            await asyncio.sleep(interval)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.get("/quotes/stream")
 async def quotes_stream() -> StreamingResponse:
     """SSE stream of option-chain snapshots for the live ticker UI."""
@@ -389,36 +458,30 @@ async def market_summary() -> dict[str, Any]:
         )
         summary["unrealized_pnl"] = float(unrealized)
         summary["equity"] = float(snap.equity + unrealized)
-        from algocrypto.symbols_util import pnl_usd
-
-        open_positions = []
-        for pos in _engine_app.orchestrator.positions.open_positions:
-            state = _engine_app.option_data.get(pos.instrument_token)
-            ltp = state.ltp if state and state.ltp is not None else pos.entry_price
-            size = getattr(pos, "contract_size", None) or Decimal("0.001")
-            open_positions.append(
-                {
-                    "position_id": str(pos.position_id),
-                    "tsym": pos.tsym,
-                    "side": pos.option_side,
-                    "quantity": pos.quantity,
-                    "lots": pos.quantity,
-                    "contract_size": float(size),
-                    "entry_price": float(pos.entry_price),
-                    "entry_ts": pos.entry_ts.isoformat(),
-                    "current_ltp": float(ltp),
-                    "unrealized_pnl": float(
-                        pnl_usd(
-                            entry=pos.entry_price,
-                            exit=ltp,
-                            lots=pos.quantity,
-                            size=Decimal(str(size)),
-                        )
-                    ),
-                    "premium_deployed": float(pos.premium_deployed),
-                    "setup_type": pos.setup_type,
-                }
+        spot = _engine_app.market_data.spot_ltp
+        open_positions = [
+            _engine_app.orchestrator.positions.serialize_open_position(
+                pos,
+                option_data=_engine_app.option_data,
+                spot=spot,
             )
+            for pos in _engine_app.orchestrator.positions.open_positions
+        ]
+        net_unreal = sum(float(p.get("net_unrealized_pnl", 0)) for p in open_positions)
+        summary["net_unrealized_pnl"] = net_unreal
+        fees_cfg = _engine_app.config.fees or {}
+        summary["delta_contract_spec"] = {
+            "btc_lot_size": float(fees_cfg.get("contract_size_btc", 0.001)),
+            "eth_lot_size": float(fees_cfg.get("contract_size_eth", 0.01)),
+            "note": "1 lot = underlying units; premium locked ≈ price × lots × contract_size",
+        }
+        summary["delta_fees_model"] = {
+            "options_taker_pct": float(fees_cfg.get("options_taker_rate", 0.0003)) * 100,
+            "options_maker_pct": float(fees_cfg.get("options_maker_rate", 0.0001)) * 100,
+            "premium_cap_pct": float(fees_cfg.get("premium_fee_cap_pct", 3.5)),
+            "gst_pct": float(fees_cfg.get("gst_pct", 18)),
+            "formula": "fee = min(notional × rate, premium × 3.5%) × 1.18 GST",
+        }
         summary["open_positions"] = open_positions
         if open_positions:
             summary["open_position"] = open_positions[0]
@@ -464,6 +527,40 @@ async def market_summary() -> dict[str, Any]:
                 }
                 for r in rows
             ]
+            last_block = _engine_app.orchestrator.last_entry_block
+            if not last_block:
+                nrow = await conn.fetchrow(
+                    """
+                    SELECT message FROM notifications
+                    WHERE title ILIKE '%orderbook%' OR message ILIKE '%orderbook%'
+                    ORDER BY ts DESC
+                    LIMIT 1
+                    """
+                )
+                if nrow and nrow["message"]:
+                    last_block = str(nrow["message"]).split(":", 1)[-1].strip()[:240]
+            features = _engine_app.orchestrator.features.compute()
+            decision = _engine_app.orchestrator.router.last_decision
+            from algocrypto.trading.decision_flow import build_decision_flow
+
+            summary["decision_flow"] = build_decision_flow(
+                features,
+                decision=decision,
+                min_confidence=int(
+                    _engine_app.config.strategy.get("router", {}).get("min_confidence", 75)
+                ),
+                orderbook_cfg=_engine_app.config.fees.get("orderbook") or {},
+                feed_mode=summary.get("feed_mode") or _engine_app._feed_mode,
+                ws_open=bool(summary.get("ws_open")),
+                ws_quote_age_sec=summary.get("ws_quote_age_sec"),
+                quote_age_sec=summary.get("quote_age_sec"),
+                entries_blocked=bool(summary.get("entries_blocked")),
+                block_reason=summary.get("block_reason"),
+                auto_trade_enabled=bool(summary.get("auto_trade_enabled", True)),
+                kill_switch=bool(summary.get("kill_switch")),
+                has_open_position=bool(summary.get("has_open_position")),
+                last_entry_block=last_block,
+            )
     except Exception:
         pass
     return summary

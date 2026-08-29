@@ -76,9 +76,15 @@ class FeatureEngine:
     lookback = int(self._reclaim.get("setup_lookback_bars", 5))
     max_dist = Decimal(str(self._reclaim.get("max_distance_to_vwap_points", 15)))
     trigger_lb = int(self._reclaim.get("trigger_lookback_bars", 3))
+    max_fresh = int(self._reclaim.get("max_fresh_trigger_bars", 1))
+    min_bars_with = int(self._reclaim.get("min_bars_with_vwap_3m", 0))
 
     setup_3m = _detect_reclaim(m3, vwap, lookback) if vwap else None
-    trigger_1m = _detect_reclaim_trigger(m1, vwap, trigger_lb) if vwap else None
+    trigger_1m = (
+      _detect_reclaim_trigger(m1, vwap, trigger_lb, max_fresh_bars=max_fresh)
+      if vwap
+      else None
+    )
 
     # Drop reclaim labels that disagree with structural bias (avoids
     # "PE setup visible but never bought" / reclaim_side_mismatch).
@@ -95,6 +101,8 @@ class FeatureEngine:
     if setup_3m and spot is not None and vwap is not None:
       dist = abs(spot - vwap)
       if dist > max_dist:
+        setup_3m = None
+      elif min_bars_with > 0 and _bars_with_vwap(m3, vwap, bias) < min_bars_with:
         setup_3m = None
 
     pullback_setup = None
@@ -312,11 +320,14 @@ def _detect_reclaim_trigger(
   bars: list[Candle],
   vwap: Decimal,
   lookback: int,
+  *,
+  max_fresh_bars: int = 1,
 ) -> str | None:
-  """1m reclaim cross within last lookback bars; most recent cross wins."""
+  """1m reclaim cross; only the most recent cross within max_fresh_bars counts."""
   if len(bars) < 2:
     return None
-  start = max(1, len(bars) - lookback)
+  fresh = max(1, max_fresh_bars)
+  start = max(1, len(bars) - fresh)
   found: str | None = None
   for i in range(start, len(bars)):
     prev = bars[i - 1].close

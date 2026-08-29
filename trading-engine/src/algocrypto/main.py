@@ -524,6 +524,176 @@ class TradingEngineApp:
             "broker_connected": True,
         }
 
+    def get_underlying_chart_bars(
+        self,
+        underlying: str,
+        *,
+        minutes: int = 5,
+    ) -> dict[str, Any]:
+        """OHLC bars for BTC perp dashboard chart from in-memory session candles."""
+        from algocrypto.models.events import CandleInterval
+
+        interval_map = {
+            1: (CandleInterval.M1, "1m"),
+            3: (CandleInterval.M3, "3m"),
+            5: (CandleInterval.M5, "5m"),
+        }
+        source_interval, interval_label = interval_map.get(
+            minutes, (CandleInterval.M5, "5m"),
+        )
+        candles = self.market_data.candles(source_interval)
+        bars: list[dict[str, Any]] = []
+        for candle in candles:
+            bars.append(
+                {
+                    "ts": candle.ts.isoformat(),
+                    "open": float(candle.open),
+                    "high": float(candle.high),
+                    "low": float(candle.low),
+                    "close": float(candle.close),
+                    "volume": candle.volume,
+                }
+            )
+        return {
+            "underlying": underlying.upper(),
+            "interval": interval_label,
+            "price_source": "delta_perp",
+            "instrument_token": None,
+            "fut_tsym": None,
+            "bars": bars,
+        }
+
+    async def get_instrument_chart_bars(
+        self,
+        token: str,
+        *,
+        exchange: str = "DELTA",
+        tsym: str | None = None,
+        underlying: str = "BTC",
+        minutes: int = 5,
+        days: int = 30,
+    ) -> dict[str, Any]:
+        """OHLC bars for a single option contract (Delta product symbol)."""
+        from algocrypto.market_data.engine import session_start_utc
+        from algocrypto.models.events import Candle, CandleInterval
+
+        tok = str(token).strip()
+        sym = (underlying or "BTC").upper()
+        exch = (exchange or "DELTA").strip().upper() or "DELTA"
+        interval_map = {
+            1: (CandleInterval.M1, "1m"),
+            3: (CandleInterval.M3, "3m"),
+            5: (CandleInterval.M5, "5m"),
+        }
+        source_interval, interval_label = interval_map.get(
+            minutes, (CandleInterval.M5, "5m"),
+        )
+        display_tsym = (tsym or "").strip() or None
+        api_symbol = display_tsym or tok
+        if self._universe:
+            match = next(
+                (i for i in self._universe.instruments if i.token == tok),
+                None,
+            )
+            if match:
+                api_symbol = match.tsym or match.token
+                if not display_tsym:
+                    display_tsym = match.tsym
+
+        empty: dict[str, Any] = {
+            "underlying": sym,
+            "interval": interval_label,
+            "price_source": "delta_option",
+            "instrument_token": tok,
+            "fut_tsym": display_tsym or api_symbol,
+            "bars": [],
+        }
+        if not tok:
+            return empty
+
+        now = datetime.now(tz=timezone.utc)
+        history_start = now - timedelta(days=max(1, days))
+        session_start = session_start_utc(now)
+
+        db_bars: list[Candle] = []
+        try:
+            db_bars = await self.market_data.candles_from_db(
+                tok, source_interval, history_start, now
+            )
+        except Exception:
+            logger.exception("option_chart_db_load_failed", token=tok)
+
+        bars_source = self.market_data.merge_candles(db_bars)
+        has_recent = bool(bars_source and bars_source[-1].ts >= session_start)
+        if not bars_source or not has_recent:
+            try:
+                broker_bars = await self.broker.get_candles(
+                    exch,
+                    api_symbol,
+                    source_interval,
+                    history_start if not bars_source else session_start,
+                    now,
+                )
+                bars_source = self.market_data.merge_candles(bars_source, broker_bars)
+            except Exception:
+                logger.exception(
+                    "option_chart_candle_fetch_failed",
+                    token=tok,
+                    symbol=api_symbol,
+                    interval=interval_label,
+                )
+
+        live_ltp: float | None = None
+        state = self.option_data.get(tok)
+        if state is not None and state.ltp is not None:
+            live_ltp = float(state.ltp)
+        bars = bars_source
+        if live_ltp is not None and bars and bars[-1].ts >= session_start:
+            px = Decimal(str(live_ltp))
+            last = bars[-1]
+            bars = [
+                *bars[:-1],
+                last.model_copy(
+                    update={
+                        "high": max(last.high, px),
+                        "low": min(last.low, px),
+                        "close": px,
+                    }
+                ),
+            ]
+
+        return {
+            "underlying": sym,
+            "interval": interval_label,
+            "price_source": "delta_option",
+            "instrument_token": tok,
+            "fut_tsym": display_tsym or api_symbol,
+            "bars": [
+                {
+                    "ts": c.ts.isoformat(),
+                    "open": float(c.open),
+                    "high": float(c.high),
+                    "low": float(c.low),
+                    "close": float(c.close),
+                    "volume": c.volume,
+                }
+                for c in bars
+            ],
+        }
+
+    def get_chart_bars(
+        self,
+        underlying: str,
+        *,
+        minutes: int = 5,
+        token: str | None = None,
+        exchange: str | None = None,
+        tsym: str | None = None,
+    ) -> dict[str, Any]:
+        """Sync wrapper for underlying chart only (legacy)."""
+        del exchange, tsym, token
+        return self.get_underlying_chart_bars(underlying, minutes=minutes)
+
     def get_watchlist_snapshot(self) -> dict[str, Any]:
         from algocrypto.contract_selector.expiry import parse_expiry_tag
         from algocrypto.option_data.greeks import compute_greeks
@@ -633,51 +803,14 @@ class TradingEngineApp:
                     }
                 )
 
-        open_positions = []
-        from algocrypto.symbols_util import pnl_usd
-
-        for p in self.orchestrator.positions.open_positions:
-            lot_size = 1
-            contract_size = Decimal(str(getattr(p, "contract_size", "0.001")))
-            underlying_u = "BTC"
-            if self._universe:
-                match = next(
-                    (i for i in self._universe.instruments if i.token == p.instrument_token),
-                    None,
-                )
-                if match:
-                    lot_size = int(match.lot_size)
-                    contract_size = Decimal(str(match.contract_size))
-                    underlying_u = match.underlying
-            state = self.option_data.get(p.instrument_token)
-            ltp = state.ltp if state and state.ltp is not None else p.entry_price
-            lots = p.quantity  # already Delta lots
-            open_positions.append(
-                {
-                    "position_id": str(p.position_id),
-                    "tsym": p.tsym,
-                    "side": p.option_side,
-                    "quantity": p.quantity,
-                    "lot_size": lot_size,
-                    "lots": lots,
-                    "contract_size": float(contract_size),
-                    "underlying_qty": float(Decimal(lots) * contract_size),
-                    "underlying": underlying_u,
-                    "entry_price": float(p.entry_price),
-                    "entry_ts": p.entry_ts.isoformat(),
-                    "current_ltp": float(ltp),
-                    "unrealized_pnl": float(
-                        pnl_usd(
-                            entry=p.entry_price,
-                            exit=ltp,
-                            lots=lots,
-                            size=contract_size,
-                        )
-                    ),
-                    "premium_deployed": float(p.premium_deployed),
-                    "setup_type": p.setup_type,
-                }
+        open_positions = [
+            self.orchestrator.positions.serialize_open_position(
+                p,
+                option_data=self.option_data,
+                spot=spot,
             )
+            for p in self.orchestrator.positions.open_positions
+        ]
 
         return {
             "underlying": underlying,
@@ -1039,6 +1172,28 @@ class TradingEngineApp:
         decision = self.orchestrator.router.last_decision
         from algocrypto.symbols_util import primary_underlying
 
+        now = datetime.now(tz=timezone.utc)
+        state = get_engine_state()
+        quote_age_sec: float | None = None
+        last_quote = state.get("last_quote_ts")
+        if last_quote:
+            try:
+                qt = datetime.fromisoformat(str(last_quote).replace("Z", "+00:00"))
+                if qt.tzinfo is None:
+                    qt = qt.replace(tzinfo=timezone.utc)
+                quote_age_sec = max(0.0, (now - qt).total_seconds())
+            except Exception:
+                quote_age_sec = None
+        ws_quote_age_sec: float | None = None
+        if self._last_ws_quote_ts is not None:
+            ws_quote_age_sec = max(0.0, (now - self._last_ws_quote_ts).total_seconds())
+        ws_open = bool(getattr(self.broker, "websocket_open", False))
+        if not ws_open and self._feed_mode in ("websocket", "ws"):
+            if ws_quote_age_sec is not None and ws_quote_age_sec <= 20.0:
+                ws_open = True
+            elif quote_age_sec is not None and quote_age_sec <= 15.0:
+                ws_open = True
+
         return {
             "underlying": primary_underlying(self.config.symbols),
             "spot_ltp": float(spot) if spot is not None else None,
@@ -1057,9 +1212,13 @@ class TradingEngineApp:
             ),
             "regime": decision.regime.primary if decision and decision.regime else None,
             "confidence": decision.confidence if decision else None,
+            "router_confidence": decision.confidence if decision else None,
             "trading_mode": self.config.env.trading_mode,
             "ist_time": ist.isoformat(),
             "feed_mode": self._feed_mode,
+            "ws_open": ws_open,
+            "ws_quote_age_sec": ws_quote_age_sec,
+            "quote_age_sec": quote_age_sec,
             "expiry_symbol": self._universe.expiry_symbol if self._universe else None,
             "instrument_count": len(self._universe.instruments) if self._universe else 0,
             "m5_count": len(m5),

@@ -5,12 +5,36 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from algocrypto.market_data.engine import MarketDataEngine
+from algocrypto.models.events import CandleInterval
 
 
 @dataclass
 class ExitDecision:
   should_exit: bool
   reason: str | None = None
+
+
+def _reversal_price(market_data: MarketDataEngine, cfg: dict) -> Decimal | None:
+  """Price used for VWAP bias-flip — prefer 1m close over tick spot."""
+  if cfg.get("trend_reversal_require_m1_close", True):
+    m1 = market_data.candles(CandleInterval.M1)
+    if m1:
+      return m1[-1].close
+  return market_data.spot_ltp
+
+
+def _trend_reversal_triggered(
+  *,
+  option_side: str,
+  price: Decimal,
+  vwap: Decimal,
+  buffer: Decimal,
+) -> bool:
+  if option_side == "CE" and price < (vwap - buffer):
+    return True
+  if option_side == "PE" and price > (vwap + buffer):
+    return True
+  return False
 
 
 def evaluate_momentum_exit(
@@ -34,29 +58,16 @@ def evaluate_momentum_exit(
   if entry_ts.tzinfo is None and now.tzinfo is not None:
     entry_ts = entry_ts.replace(tzinfo=timezone.utc)
   min_hold = int(cfg.get("min_hold_seconds", 20))
-  if (now - entry_ts).total_seconds() < min_hold:
+  held_seconds = (now - entry_ts).total_seconds()
+  if held_seconds < min_hold:
     return ExitDecision(False)
 
   max_hold = int(cfg.get("max_hold_minutes", 0))
-  if max_hold > 0 and (now - entry_ts).total_seconds() > max_hold * 60:
+  if max_hold > 0 and held_seconds > max_hold * 60:
     return ExitDecision(True, "time_stop")
 
   if entry_price <= 0 or current_ltp <= 0:
     return ExitDecision(False)
-
-  # Trend / bias reversal — prefer ATR-relative buffer; fall back to fixed points.
-  if cfg.get("bias_flip_exit", True):
-    spot = market_data.spot_ltp
-    vwap = market_data.session_vwap_value
-    if atr is not None and atr > 0 and cfg.get("bias_flip_atr_multiplier") is not None:
-      buffer = atr * Decimal(str(cfg.get("bias_flip_atr_multiplier", 0.35)))
-    else:
-      buffer = Decimal(str(cfg.get("bias_flip_buffer_points", 0)))
-    if spot is not None and vwap is not None:
-      if option_side == "CE" and spot < (vwap - buffer):
-        return ExitDecision(True, "trend_reversal")
-      if option_side == "PE" and spot > (vwap + buffer):
-        return ExitDecision(True, "trend_reversal")
 
   high_vol = regime_primary == "high_volatility"
   adverse_key = (
@@ -67,7 +78,6 @@ def evaluate_momentum_exit(
   trail_default = 30 if high_vol else 40
 
   adverse_pct = Decimal(str(cfg.get(adverse_key, adverse_default))) / Decimal("100")
-  # Phase 6: soft ATR scale — high spot ATR → slightly wider adverse room
   if (
     bool(cfg.get("dynamic_exits_enabled", True))
     and atr is not None
@@ -89,5 +99,31 @@ def evaluate_momentum_exit(
     trail_floor = entry_price + mfe_points * (Decimal("1") - giveback_pct)
     if current_ltp <= trail_floor:
       return ExitDecision(True, "momentum_trail")
+
+  if cfg.get("bias_flip_exit", True):
+    reversal_min_hold = int(cfg.get("trend_reversal_min_hold_seconds", min_hold))
+    if held_seconds >= reversal_min_hold:
+      defer_pct = Decimal(str(cfg.get("trend_reversal_defer_profit_pct", 0))) / Decimal("100")
+      underwater_only = bool(cfg.get("trend_reversal_only_if_underwater", False))
+      skip_reversal = False
+      if underwater_only and current_ltp >= entry_price:
+        skip_reversal = True
+      elif defer_pct > 0 and current_ltp >= entry_price * (Decimal("1") + defer_pct):
+        skip_reversal = True
+      if not skip_reversal:
+        spot = _reversal_price(market_data, cfg)
+        vwap = market_data.session_vwap_value
+        if spot is not None and vwap is not None:
+          if atr is not None and atr > 0 and cfg.get("bias_flip_atr_multiplier") is not None:
+            buffer = atr * Decimal(str(cfg.get("bias_flip_atr_multiplier", 0.35)))
+          else:
+            buffer = Decimal(str(cfg.get("bias_flip_buffer_points", 0)))
+          if _trend_reversal_triggered(
+            option_side=option_side,
+            price=spot,
+            vwap=vwap,
+            buffer=buffer,
+          ):
+            return ExitDecision(True, "trend_reversal")
 
   return ExitDecision(False)

@@ -21,7 +21,7 @@ from algocrypto.option_data.vol_model import (
 )
 from algocrypto.position.thesis import assess_thesis, build_thesis_from_signal
 from algocrypto.strategy.families import health_score_from_stats, strategy_family
-from algocrypto.trading.ev_engine import estimate_ev
+from algocrypto.trading.ev_engine import estimate_ev, resolve_ev_engine_config
 
 
 def _candles(n: int = 80, start: float = 100.0) -> list[Candle]:
@@ -118,6 +118,42 @@ def test_estimate_ev_uses_prior_not_score():
   # Same prior → same EV regardless of rule_score
   assert abs(high.expected_value - low.expected_value) < 1e-9
   assert high.detail["pwin_source"] == "uninformative_prior"
+
+
+def test_resolve_ev_engine_config_paper_bypass():
+  live = resolve_ev_engine_config(
+    {
+      "min_ev": 0.0,
+      "prior_pwin": 0.45,
+      "paper": {
+        "enabled": True,
+        "prior_pwin": 0.52,
+        "min_ev": -1.0,
+        "bypass_when_rule_score_gte": 75,
+      },
+    },
+    is_paper=True,
+    rule_score=88,
+  )
+  assert live["ev_mode"] == "paper"
+  assert live["prior_pwin"] == 0.52
+  assert live["skip_ev_block"] is True
+
+  below = resolve_ev_engine_config(
+    {"paper": {"enabled": True, "bypass_when_rule_score_gte": 75}},
+    is_paper=True,
+    rule_score=70,
+  )
+  assert below["skip_ev_block"] is False
+
+  prod = resolve_ev_engine_config(
+    {"paper": {"enabled": True, "bypass_when_rule_score_gte": 75}},
+    is_paper=False,
+    rule_score=90,
+  )
+  assert prod["ev_mode"] == "live"
+  assert prod["prior_pwin"] == 0.45
+  assert prod["skip_ev_block"] is False
 
 
 def test_estimate_ev_blocks_negative():

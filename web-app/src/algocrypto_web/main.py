@@ -832,6 +832,78 @@ async def watchlist(_user: User) -> dict[str, Any]:
             }
 
 
+@app.get("/api/chart/candles")
+async def chart_candles(
+    _user: User,
+    underlying: str = "BTC",
+    interval: str = "5m",
+    days: int = 30,
+    token: str | None = None,
+    exchange: str | None = None,
+    tsym: str | None = None,
+) -> dict[str, Any]:
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        try:
+            params: dict[str, str] = {
+                "underlying": underlying,
+                "interval": interval,
+                "days": str(days),
+            }
+            if token:
+                params["token"] = token
+            if exchange:
+                params["exchange"] = exchange
+            if tsym:
+                params["tsym"] = tsym
+            resp = await client.get(
+                f"{settings.trading_engine_url}/chart/candles",
+                params=params,
+            )
+            return resp.json()
+        except Exception:
+            return {
+                "underlying": underlying.upper(),
+                "interval": interval,
+                "instrument_token": token,
+                "fut_tsym": tsym,
+                "bars": [],
+            }
+
+
+@app.get("/api/positions/stream")
+async def positions_stream(_user: User) -> StreamingResponse:
+    """Proxy live position ticks from the trading engine to the browser."""
+
+    async def generate():
+        async with httpx.AsyncClient(timeout=None) as client:
+            while True:
+                try:
+                    async with client.stream(
+                        "GET", f"{settings.trading_engine_url}/positions/stream"
+                    ) as resp:
+                        async for line in resp.aiter_lines():
+                            if line.startswith("data:"):
+                                yield f"{line}\n\n"
+                except Exception as exc:
+                    payload = {
+                        "open_positions": [],
+                        "feed_mode": "offline",
+                        "error": str(exc),
+                    }
+                    yield f"data: {json.dumps(payload)}\n\n"
+                    await asyncio.sleep(2)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.get("/api/quotes/stream")
 async def quotes_stream(_user: User) -> StreamingResponse:
     """Proxy live option-chain ticks from the trading engine to the browser."""

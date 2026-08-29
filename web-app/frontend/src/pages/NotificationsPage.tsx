@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { BellOff } from "lucide-react";
+import { Bell, BellOff } from "lucide-react";
 import { fetchNotifications, markNotificationRead } from "../api/client";
 import type { Notification } from "../types";
+import { AppPageShell } from "../components/AppPageShell";
 import { StatusBadge } from "../components/StatusBadge";
 
 function formatTs(ts: string) {
@@ -32,14 +33,11 @@ export function NotificationsPage() {
   const unread = items.filter((n) => !n.read).length;
 
   return (
-    <>
-      <div className="page-header">
-        <h2>Alerts</h2>
-        <p>
-          Important trading alerts only — entries, exits, and critical system events
-          {unread > 0 && ` · ${unread} unread`}
-        </p>
-      </div>
+    <AppPageShell
+      title="Alerts"
+      icon={Bell}
+      description={`Important trading alerts — entries, exits, and critical events${unread > 0 ? ` · ${unread} unread` : ""}`}
+    >
 
       {error && <div className="error-banner">{error}</div>}
 
@@ -69,6 +67,6 @@ export function NotificationsPage() {
           </ul>
         )}
       </div>
-    </>
+    </AppPageShell>
   );
 }

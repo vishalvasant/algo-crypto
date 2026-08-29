@@ -23,6 +23,40 @@ class EVResult:
   detail: dict[str, Any]
 
 
+def resolve_ev_engine_config(
+  ev_cfg: dict | None,
+  *,
+  is_paper: bool,
+  rule_score: int = 0,
+) -> dict[str, Any]:
+  """Merge live vs paper EV parameters; paper may bypass the gate when router passed."""
+  cfg = dict(ev_cfg or {})
+  paper_cfg = dict(cfg.get("paper") or {})
+  min_ev = float(cfg.get("min_ev", 0.0))
+  prior_pwin = float(cfg.get("prior_pwin", 0.45))
+  skip_ev_block = False
+  ev_mode = "live"
+
+  if is_paper and bool(paper_cfg.get("enabled", True)):
+    ev_mode = "paper"
+    min_ev = float(paper_cfg.get("min_ev", min_ev))
+    prior_pwin = float(paper_cfg.get("prior_pwin", prior_pwin))
+    bypass_gte = paper_cfg.get("bypass_when_rule_score_gte")
+    if bypass_gte is not None and rule_score >= int(bypass_gte):
+      skip_ev_block = True
+
+  return {
+    "min_ev": min_ev,
+    "prior_pwin": prior_pwin,
+    "adverse_pct": float(cfg.get("adverse_pct", 0.12)),
+    "reward_pct": float(cfg.get("reward_pct", 0.18)),
+    "min_trades_for_pwin": int(cfg.get("min_trades_for_pwin", 8)),
+    "assumed_fee_pct_of_premium": float(cfg.get("assumed_fee_pct_of_premium", 0.02)),
+    "skip_ev_block": skip_ev_block,
+    "ev_mode": ev_mode,
+  }
+
+
 def estimate_ev(
   *,
   rule_score: int,

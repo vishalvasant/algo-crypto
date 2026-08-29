@@ -107,6 +107,107 @@ class PositionManager:
       )
     return total
 
+  def serialize_open_position(
+    self,
+    pos: OpenPosition,
+    *,
+    option_data,
+    spot: Decimal | None = None,
+  ) -> dict:
+    """API view: premium, notional, fees, gross/net unrealized P&L."""
+    from algocrypto.fees import option_fee
+    from algocrypto.symbols_util import pnl_usd
+
+    state = option_data.get(pos.instrument_token)
+    ltp = state.ltp if state and state.ltp is not None else pos.entry_price
+    size = pos.contract_size
+    lots = pos.quantity
+    gross_pnl = pnl_usd(entry=pos.entry_price, exit=ltp, lots=lots, size=size)
+    spot_px = spot if spot is not None and spot > 0 else (pos.entry_spot or Decimal("0"))
+    entry_spot_px = (
+      pos.entry_spot
+      if pos.entry_spot is not None and pos.entry_spot > 0
+      else spot_px
+    )
+    fees_cfg = self._config.fees or {}
+
+    entry_fee_q = None
+    if entry_spot_px > 0:
+      entry_fee_q = option_fee(
+        spot=entry_spot_px,
+        premium=pos.entry_price,
+        lots=lots,
+        contract_size=size,
+        fees_cfg=fees_cfg,
+      )
+    entry_fee = pos.entry_fee_usd if pos.entry_fee_usd > 0 else (
+      entry_fee_q.total_fee_usd if entry_fee_q else Decimal("0")
+    )
+
+    est_exit_fee = Decimal("0")
+    exit_fee_q = None
+    if spot_px > 0:
+      exit_fee_q = option_fee(
+        spot=spot_px,
+        premium=ltp,
+        lots=lots,
+        contract_size=size,
+        fees_cfg=fees_cfg,
+      )
+      est_exit_fee = exit_fee_q.total_fee_usd
+
+    net_pnl = gross_pnl - entry_fee - est_exit_fee
+    notional = float(lots * size * spot_px) if spot_px > 0 else None
+    underlying_qty = float(lots * size)
+    premium_per_lot = float(pos.entry_price * size)
+
+    row: dict = {
+      "position_id": str(pos.position_id),
+      "instrument_token": pos.instrument_token,
+      "tsym": pos.tsym,
+      "side": pos.option_side,
+      "quantity": lots,
+      "lots": lots,
+      "lot_size": 1,
+      "contract_size": float(size),
+      "underlying_qty": underlying_qty,
+      "entry_price": float(pos.entry_price),
+      "entry_ts": pos.entry_ts.isoformat(),
+      "current_ltp": float(ltp),
+      "premium_deployed": float(pos.premium_deployed),
+      "premium_per_lot_usd": premium_per_lot,
+      "setup_type": pos.setup_type,
+      "entry_spot": float(entry_spot_px) if entry_spot_px > 0 else None,
+      "current_spot": float(spot_px) if spot_px > 0 else None,
+      "notional_usd": notional,
+      "gross_unrealized_pnl": float(gross_pnl),
+      "unrealized_pnl": float(gross_pnl),
+      "entry_fee_usd": float(entry_fee),
+      "estimated_exit_fee_usd": float(est_exit_fee),
+      "net_unrealized_pnl": float(net_pnl),
+      "fees_paid_usd": float(entry_fee),
+      "fees_if_exit_now_usd": float(entry_fee + est_exit_fee),
+    }
+    if entry_fee_q is not None:
+      row["entry_fee_detail"] = {
+        "notional_usd": float(entry_fee_q.notional_usd),
+        "premium_usd": float(entry_fee_q.premium_usd),
+        "raw_fee_usd": float(entry_fee_q.raw_fee_usd),
+        "total_fee_usd": float(entry_fee_q.total_fee_usd),
+        "gst_usd": float(entry_fee_q.gst_usd),
+        "capped": entry_fee_q.capped,
+        "rate_pct": float(entry_fee_q.rate_used * 100),
+      }
+    if exit_fee_q is not None:
+      row["exit_fee_estimate"] = {
+        "notional_usd": float(exit_fee_q.notional_usd),
+        "premium_usd": float(exit_fee_q.premium_usd),
+        "total_fee_usd": float(exit_fee_q.total_fee_usd),
+        "gst_usd": float(exit_fee_q.gst_usd),
+        "capped": exit_fee_q.capped,
+      }
+    return row
+
   def register_open(
     self,
     position_id: UUID,
@@ -515,6 +616,8 @@ class PositionManager:
       )
 
     self._open.clear()
+    spot = self._market_data.spot_ltp
+    fees_cfg = self._config.fees or {}
     for row in rows:
       tsym = row["tsym"]
       und = underlying_from_tsym(tsym)
@@ -522,6 +625,17 @@ class PositionManager:
       qty = int(row["quantity"])
       entry = Decimal(str(row["entry_price"]))
       prem = premium_usd(price=entry, lots=qty, size=size)
+      entry_fee = Decimal("0")
+      if spot is not None and spot > 0:
+        from algocrypto.fees import option_fee
+
+        entry_fee = option_fee(
+          spot=spot,
+          premium=entry,
+          lots=qty,
+          contract_size=size,
+          fees_cfg=fees_cfg,
+        ).total_fee_usd
       pos_id = row["id"]
       option_side = "CE" if str(tsym).upper().startswith("C-") else "PE"
       self._open[pos_id] = OpenPosition(
@@ -537,6 +651,8 @@ class PositionManager:
         premium_deployed=prem,
         setup_type=row["setup_type"] or "rehydrated",
         contract_size=size,
+        entry_spot=spot,
+        entry_fee_usd=entry_fee,
         mfe=Decimal(str(row["mfe"] or 0)),
         mae=Decimal(str(row["mae"] or 0)),
         signal_snapshot={},

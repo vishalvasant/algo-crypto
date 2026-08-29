@@ -17,6 +17,7 @@ from algocrypto.risk.circuit_breakers import (
   evaluate_circuit_breakers,
   post_trade_halt_reason,
 )
+from algocrypto.risk.resolve import resolve_risk_config
 from algocrypto.risk.states import RiskState
 from algocrypto.symbols_util import account_capital_usd, premium_usd
 
@@ -179,6 +180,9 @@ class RiskEngine:
     self._config = config
     self._risk = config.risk
 
+  def _risk_cfg(self) -> dict:
+    return resolve_risk_config(self._risk, is_paper=self._config.is_paper)
+
   def _today_ist(self) -> date:
     return datetime.now(IST).date()
 
@@ -189,24 +193,65 @@ class RiskEngine:
     open_position_count: int = 0,
     is_flip: bool = False,
   ) -> CircuitDecision:
-    return evaluate_circuit_breakers(
-      self._risk,
-      CircuitSnapshot(
+    risk_cfg = self._risk_cfg()
+    snap = snapshot
+    # Paper learning mode: ignore sticky circuit-breaker halts (keep kill_switch).
+    if risk_cfg.get("paper_disable_circuit_breakers") and not snapshot.kill_switch:
+      snap = DailyRiskSnapshot(
+        trade_date=snapshot.trade_date,
         starting_capital=snapshot.starting_capital,
+        available_capital=snapshot.available_capital,
+        deployed_capital=snapshot.deployed_capital,
         realized_pnl=snapshot.realized_pnl,
         trade_count=snapshot.trade_count,
         consecutive_losses=snapshot.consecutive_losses,
-        open_position_count=open_position_count,
+        kill_switch=False,
+        entries_blocked=False,
+        block_reason=None,
         flip_count=snapshot.flip_count,
-        flips_last_hour=snapshot.flips_last_hour,
-        losing_trades_last_hour=snapshot.losing_trades_last_hour,
-        kill_switch=snapshot.kill_switch,
-        entries_blocked=snapshot.entries_blocked,
-        risk_state=snapshot.risk_state,
-        flips_disabled=snapshot.flips_disabled,
+        flips_disabled=False,
+        risk_state=RiskState.NORMAL,
+        losing_trade_timestamps=snapshot.losing_trade_timestamps,
+        flip_timestamps=snapshot.flip_timestamps,
+      )
+    return evaluate_circuit_breakers(
+      risk_cfg,
+      CircuitSnapshot(
+        starting_capital=snap.starting_capital,
+        realized_pnl=snap.realized_pnl,
+        trade_count=snap.trade_count,
+        consecutive_losses=snap.consecutive_losses,
+        open_position_count=open_position_count,
+        flip_count=snap.flip_count,
+        flips_last_hour=snap.flips_last_hour,
+        losing_trades_last_hour=snap.losing_trades_last_hour,
+        kill_switch=snap.kill_switch,
+        entries_blocked=snap.entries_blocked,
+        risk_state=snap.risk_state,
+        flips_disabled=snap.flips_disabled,
       ),
       is_flip=is_flip,
     )
+
+  async def clear_paper_circuit_halt(self) -> None:
+    """Unblock entries after circuit halt when paper circuit breakers are disabled."""
+    if not self._risk_cfg().get("paper_disable_circuit_breakers"):
+      return
+    today = self._today_ist()
+    pool = get_pool()
+    async with pool.acquire() as conn:
+      await conn.execute(
+        """
+        UPDATE daily_risk_state SET
+          entries_blocked = FALSE,
+          flips_disabled = FALSE,
+          risk_state = 'NORMAL',
+          block_reason = NULL,
+          updated_at = now()
+        WHERE trade_date = $1 AND NOT kill_switch
+        """,
+        today,
+      )
 
   async def ensure_daily_state(self) -> DailyRiskSnapshot:
     capital = account_capital_usd(self._risk)
@@ -459,7 +504,7 @@ class RiskEngine:
 
     exit_cfg = getattr(self._config, "position_exit", None) or {}
     breakdown = compute_lot_size(
-      self._risk,
+      self._risk_cfg(),
       confidence=confidence,
       entry_ltp=entry_ltp,
       contract_size=contract_size,
@@ -602,18 +647,21 @@ class RiskEngine:
         )
 
     snap = await self.ensure_daily_state()
-    halt_reason = post_trade_halt_reason(
-      self._risk,
-      starting_capital=snap.starting_capital,
-      realized_pnl_after=snap.realized_pnl,
-      trade_count_after=snap.trade_count,
-      consecutive_losses_after=snap.consecutive_losses,
-      losing_trades_last_hour=snap.losing_trades_last_hour,
-    )
+    risk_cfg = self._risk_cfg()
+    halt_reason = None
+    if not risk_cfg.get("paper_disable_circuit_breakers"):
+      halt_reason = post_trade_halt_reason(
+        risk_cfg,
+        starting_capital=snap.starting_capital,
+        realized_pnl_after=snap.realized_pnl,
+        trade_count_after=snap.trade_count,
+        consecutive_losses_after=snap.consecutive_losses,
+        losing_trades_last_hour=snap.losing_trades_last_hour,
+      )
     if halt_reason:
       await self.halt_entries(halt_reason, state=RiskState.HALTED)
       if halt_reason == "daily_loss_limit" and bool(
-        self._risk.get("emergency_flatten_on_daily_loss", False)
+        risk_cfg.get("emergency_flatten_on_daily_loss", False)
       ):
         await self.halt_entries(
           "daily_loss_limit_emergency",

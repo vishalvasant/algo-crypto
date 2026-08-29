@@ -61,3 +61,13 @@ confidence_lot_sizing:
       lots: 25
     - min_confidence: 70
       lots: 15
+
+# Paper mode: keep trading through circuit halts while collecting stats (live caps unchanged).
+paper:
+  enabled: true
+  disable_circuit_breakers: true
+  relax_deploy_caps: true
+  max_premium_pct_of_available: 85
+  max_premium_deployed_pct: 85
+  max_deployed_pct_of_equity: 85
+  max_exposure_pct: 85

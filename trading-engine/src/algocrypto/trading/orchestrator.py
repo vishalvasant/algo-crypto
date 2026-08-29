@@ -44,7 +44,7 @@ from algocrypto.safety.engine import SafetyEngine
 from algocrypto.scanner.library import build_strategy_scanners
 from algocrypto.strategy.families import strategy_family
 from algocrypto.strategy.router import StrategyRouter
-from algocrypto.trading.ev_engine import estimate_ev
+from algocrypto.trading.ev_engine import estimate_ev, resolve_ev_engine_config
 from algocrypto.validator.engine import RuleValidator
 
 logger = structlog.get_logger(__name__)
@@ -88,6 +88,7 @@ class TradingOrchestrator:
     self.positions.set_trade_close_hook(self._on_trade_closed)
     self._contract_selector = ContractSelector(config, broker)
     self._last_flip_at: datetime | None = None
+    self._last_entry_block: str | None = None
 
     self._scan_lock = asyncio.Lock()
     self._entering_tokens: set[str] = set()
@@ -127,7 +128,12 @@ class TradingOrchestrator:
   def set_universe(self, universe: ContractUniverse) -> None:
     self._universe = universe
 
+  @property
+  def last_entry_block(self) -> str | None:
+    return self._last_entry_block
+
   async def initialize(self) -> None:
+    await self.risk.clear_paper_circuit_halt()
     snap = await self.risk.ensure_daily_state()
     await self._load_prior_day_levels()
     logger.info(
@@ -743,6 +749,8 @@ class TradingOrchestrator:
     )
     await self._journal.write_validation(validation)
     if not validation.passed:
+      reasons = list(validation.rejection_reasons or [])
+      self._last_entry_block = ", ".join(reasons)[:240] if reasons else "validation_failed"
       return
 
     # Phase 5: TTE min-confidence bump for near-expiry
@@ -819,6 +827,8 @@ class TradingOrchestrator:
               ask=book.best_ask,
             )
         if not ok_book:
+          block = ", ".join(book_reasons)
+          self._last_entry_block = block[:240]
           await self._journal.write_notification(
             "trade",
             "warning",
@@ -855,6 +865,7 @@ class TradingOrchestrator:
           "executable_reasons": list(exe_quote.reasons),
         }
         if not ok_slip:
+          self._last_entry_block = (slip_reason or "excessive_expected_slippage")[:240]
           await self._journal.write_system_event(
             SystemEvent(
               event_type="strategy_decision",
@@ -913,6 +924,7 @@ class TradingOrchestrator:
       portfolio_positions=self.positions.open_positions,
     )
     if not sizing.approved:
+      self._last_entry_block = (sizing.rejection_reason or "risk_rejected")[:240]
       await self._journal.write_notification(
         "trade",
         "warning",
@@ -966,28 +978,38 @@ class TradingOrchestrator:
     ev_cfg = self._config.strategy.get("ev_engine") or {}
     if bool(ev_cfg.get("enabled", True)):
       prem = float(sizing.premium_required or 0)
-      fee_pct = float(ev_cfg.get("assumed_fee_pct_of_premium", 0.02))
+      rule_score = int(signal.confidence or 0)
+      resolved = resolve_ev_engine_config(
+        ev_cfg,
+        is_paper=self._config.is_paper,
+        rule_score=rule_score,
+      )
+      fee_pct = resolved["assumed_fee_pct_of_premium"]
       slip = float((signal.scanner_metadata or {}).get("expected_slippage") or 0)
       ev = estimate_ev(
-        rule_score=int(signal.confidence or 0),
+        rule_score=rule_score,
         strategy=signal.setup_type,
         entry_premium_usd=prem,
         fees_usd=prem * fee_pct,
         expected_slippage_usd=slip,
         learner_snapshot=self.learner.snapshot(),
-        adverse_pct=float(ev_cfg.get("adverse_pct", 0.12)),
-        reward_pct=float(ev_cfg.get("reward_pct", 0.18)),
-        min_ev=float(ev_cfg.get("min_ev", 0.0)),
-        min_trades_for_pwin=int(ev_cfg.get("min_trades_for_pwin", 8)),
-        prior_pwin=float(ev_cfg.get("prior_pwin", 0.45)),
+        adverse_pct=resolved["adverse_pct"],
+        reward_pct=resolved["reward_pct"],
+        min_ev=resolved["min_ev"],
+        min_trades_for_pwin=resolved["min_trades_for_pwin"],
+        prior_pwin=resolved["prior_pwin"],
       )
+      ev_eligible = ev.eligible or bool(resolved.get("skip_ev_block"))
+      ev_reason = None if ev_eligible else ev.reason
       signal.scanner_metadata = {
         **(signal.scanner_metadata or {}),
         "ev": {
           "expected_value": round(ev.expected_value, 4),
           "pwin": ev.estimated_win_probability,
-          "eligible": ev.eligible,
-          "reason": ev.reason,
+          "eligible": ev_eligible,
+          "reason": ev_reason,
+          "ev_mode": resolved.get("ev_mode"),
+          "paper_bypass": bool(resolved.get("skip_ev_block")),
           **ev.detail,
         },
       }
@@ -995,19 +1017,22 @@ class TradingOrchestrator:
         SystemEvent(
           event_type="ev_estimate",
           ts=signal.ts,
-          severity="info" if ev.eligible else "warning",
-          message="eligible" if ev.eligible else (ev.reason or "negative_expected_value"),
+          severity="info" if ev_eligible else "warning",
+          message="eligible" if ev_eligible else (ev.reason or "negative_expected_value"),
           metadata={
             "setup": signal.setup_type,
             "tsym": signal.tsym,
             "expected_value": round(ev.expected_value, 4),
             "pwin": ev.estimated_win_probability,
-            "eligible": ev.eligible,
+            "eligible": ev_eligible,
+            "ev_mode": resolved.get("ev_mode"),
+            "paper_bypass": bool(resolved.get("skip_ev_block")),
             **ev.detail,
           },
         )
       )
-      if not ev.eligible:
+      if not ev_eligible:
+        self._last_entry_block = (ev.reason or "negative_expected_value")[:240]
         await self._journal.write_system_event(
           SystemEvent(
             event_type="strategy_decision",
@@ -1071,6 +1096,7 @@ class TradingOrchestrator:
         fill_px,
         thesis=self._pending_thesis,
       )
+      self._last_entry_block = None
       self._pending_thesis = None
       # reconcile_margin syncs deployed to live open premiums (handles unused reserve)
       await self.risk.reconcile_margin(self.positions.total_deployed())

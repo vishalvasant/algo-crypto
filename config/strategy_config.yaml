@@ -3,8 +3,8 @@ strategy_version: strategy_router_v2.0.0_institutional
 
 # Rule-based router (no LLM). Pick one strategy or NO_TRADE.
 router:
-  # Rulebook §9 Valid tier starts at 75.
-  min_confidence: 75
+  # Rulebook §9 Valid tier starts at 75; paper tightened after chop session.
+  min_confidence: 78
   log_every_decision: true
   enabled_strategies:
     - vwap_reclaim
@@ -45,7 +45,7 @@ regime:
 # Gap-Fix Phase 2: ATR-relative VWAP dead zone → NEUTRAL bias (no CE/PE flicker).
 vwap_bias:
   atr_lookback_bars: 14
-  dead_zone_atr_multiplier: 0.25
+  dead_zone_atr_multiplier: 0.35
 
 vwap_reclaim:
   bias_timeframe: 5m
@@ -53,7 +53,11 @@ vwap_reclaim:
   trigger_timeframe: 1m
   setup_lookback_bars: 8
   trigger_lookback_bars: 5
-  max_distance_to_vwap_points: 40
+  # Only accept 1m cross on the latest bar (no stale 5-bar-old triggers).
+  max_fresh_trigger_bars: 1
+  # Require reclaim side established on 3m before entry.
+  min_bars_with_vwap_3m: 2
+  max_distance_to_vwap_points: 28
   neutral_bias_blocks_trade: true
 
 vwap_pullback:
@@ -106,6 +110,12 @@ ev_engine:
   min_trades_for_pwin: 8
   prior_pwin: 0.45
   assumed_fee_pct_of_premium: 0.02
+  # Paper: collect stats but avoid negative-EV marginal fills.
+  paper:
+    enabled: true
+    prior_pwin: 0.50
+    min_ev: 0.0
+    bypass_when_rule_score_gte: 82
 
 # Gap-Fix Phase 7 — strategy family / health
 strategy_health:

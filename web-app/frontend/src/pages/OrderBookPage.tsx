@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { BookOpen, Download, FileText, Filter } from "lucide-react";
 import { fetchTradeDates, fetchTradesReport } from "../api/client";
 import type { Trade, TradesReport } from "../types";
+import { AppPageShell } from "../components/AppPageShell";
 import { formatUsd, formatLotsLabel } from "../utils/money";
 
 function todayIst(): string {
@@ -323,14 +324,11 @@ export function OrderBookPage() {
   };
 
   return (
-    <>
-      <div className="page-header">
-        <h2>Order Book</h2>
-        <p>
-          Historical closed trades · filter by IST date · export CSV / JSON /
-          full P&amp;L report
-        </p>
-      </div>
+    <AppPageShell
+      title="Orders"
+      icon={BookOpen}
+      description="Historical closed trades · filter by IST date · export CSV / JSON / P&L report"
+    >
 
       {error && <div className="error-banner">{error}</div>}
 
@@ -554,6 +552,6 @@ export function OrderBookPage() {
           </table>
         )}
       </div>
-    </>
+    </AppPageShell>
   );
 }

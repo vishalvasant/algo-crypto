@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Filter, RefreshCw, ScrollText } from "lucide-react";
 import { fetchDecisionLogs } from "../api/client";
 import type { DecisionLogEvent } from "../types";
+import { AppPageShell } from "../components/AppPageShell";
 import { StatusBadge } from "../components/StatusBadge";
 
 function formatTs(ts: string) {
@@ -73,51 +74,47 @@ export function DecisionLogsPage() {
   }, [load]);
 
   return (
-    <div className="logs-page">
-      <div className="card panel logs-hero">
-        <div className="panel-head">
-          <h3>
-            <ScrollText size={16} />
-            Decision Logs
-          </h3>
-          <button className="btn btn-ghost btn-sm" onClick={load} disabled={busy}>
-            <RefreshCw size={14} />
-            {busy ? "Loading…" : "Refresh"}
-          </button>
-        </div>
-        <p className="panel-copy">
-          While the market session is open, the engine scans for entries every{" "}
-          <strong>{intervalSec}s</strong>. Each scan writes a decision here (NO_TRADE or
-          selected strategy + confidence). Entry skips and manual syncs are included.
-        </p>
-        <div className="metric-grid logs-metrics">
-          <div className="metric">
-            <span>Scan interval</span>
-            <strong>{intervalSec}s</strong>
+    <AppPageShell
+      title="Decision Logs"
+      icon={ScrollText}
+      description={`Engine scans every ${intervalSec}s while the session is open — decisions, skips, and sync events.`}
+      actions={
+        <button className="btn btn-ghost btn-sm" onClick={load} disabled={busy} type="button">
+          <RefreshCw size={14} className={busy ? "spin" : undefined} />
+          {busy ? "Loading…" : "Refresh"}
+        </button>
+      }
+    >
+      <div className="logs-page">
+        <section className="cockpit-panel logs-stats-panel">
+          <div className="metric-grid logs-metrics">
+            <div className="metric">
+              <span>Scan interval</span>
+              <strong>{intervalSec}s</strong>
+            </div>
+            <div className="metric">
+              <span>Decisions today</span>
+              <strong>{todayCount}</strong>
+            </div>
+            <div className="metric">
+              <span>Showing</span>
+              <strong>{events.length}</strong>
+            </div>
           </div>
-          <div className="metric">
-            <span>Decisions today</span>
-            <strong>{todayCount}</strong>
+          <div className="logs-filter">
+            <Filter size={14} />
+            <select value={filter} onChange={(e) => setFilter(e.target.value)}>
+              <option value="all">All events</option>
+              <option value="strategy_decision">Strategy decisions</option>
+              <option value="entry_skipped">Entry skipped</option>
+              <option value="manual_sync">Manual sync</option>
+            </select>
           </div>
-          <div className="metric">
-            <span>Showing</span>
-            <strong>{events.length}</strong>
-          </div>
-        </div>
-        <div className="logs-filter">
-          <Filter size={14} />
-          <select value={filter} onChange={(e) => setFilter(e.target.value)}>
-            <option value="all">All events</option>
-            <option value="strategy_decision">Strategy decisions</option>
-            <option value="entry_skipped">Entry skipped</option>
-            <option value="manual_sync">Manual sync</option>
-          </select>
-        </div>
-      </div>
+        </section>
 
-      {error && <div className="error-banner">{error}</div>}
+        {error && <div className="error-banner">{error}</div>}
 
-      <div className="card panel">
+        <div className="card panel cockpit-panel">
         {events.length === 0 ? (
           <p className="panel-copy muted">
             No logs yet. They appear once the market is open and the scanner runs (every{" "}
@@ -160,7 +157,8 @@ export function DecisionLogsPage() {
             </table>
           </div>
         )}
+        </div>
       </div>
-    </div>
+    </AppPageShell>
   );
 }

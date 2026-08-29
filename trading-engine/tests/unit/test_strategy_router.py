@@ -91,6 +91,23 @@ def test_reclaim_lookback_detects_prior_below():
   assert _detect_reclaim_trigger(bars, vwap, lookback=3) == "vwap_reclaim_cross_up"
 
 
+def test_reclaim_trigger_requires_fresh_cross():
+  vwap = Decimal("100")
+  bars = [
+    _candle(95),
+    _candle(101),  # cross here (stale)
+    _candle(102),
+    _candle(103),
+  ]
+  assert _detect_reclaim_trigger(bars, vwap, lookback=5, max_fresh_bars=1) is None
+  bars.append(_candle(104))  # no new cross on latest bar
+  assert _detect_reclaim_trigger(bars, vwap, lookback=5, max_fresh_bars=1) is None
+  bars.append(_candle(105))  # fresh cross up on latest transition 104→105 if 104<vwap
+  bars[-2] = _candle(99)
+  bars[-1] = _candle(101)
+  assert _detect_reclaim_trigger(bars, vwap, lookback=5, max_fresh_bars=1) == "vwap_reclaim_cross_up"
+
+
 def test_pullback_after_extension():
   vwap = Decimal("100")
   bars = [

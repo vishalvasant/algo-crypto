@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { LineChart } from "lucide-react";
 import { fetchMarketSummary, fetchTradesToday } from "../api/client";
 import type { MarketSummary, Trade } from "../types";
+import { AppPageShell } from "../components/AppPageShell";
 import { formatUsd, formatLotsLabel } from "../utils/money";
 
 function formatTs(ts: string | null | undefined) {
@@ -89,14 +90,11 @@ export function TradesPage() {
   }, [trades, summary]);
 
   return (
-    <>
-      <div className="page-header">
-        <h2>P&amp;L / Today</h2>
-        <p>
-          Today&apos;s closed trades · live equity (capital carries forward) ·
-          older days are on Order Book · auto-refresh 10s
-        </p>
-      </div>
+    <AppPageShell
+      title="Analytics"
+      icon={LineChart}
+      description="Today's closed trades · live equity · older days on Order Book · auto-refresh 10s"
+    >
 
       {error && <div className="error-banner">{error}</div>}
 
@@ -208,6 +206,6 @@ export function TradesPage() {
           </table>
         )}
       </div>
-    </>
+    </AppPageShell>
   );
 }

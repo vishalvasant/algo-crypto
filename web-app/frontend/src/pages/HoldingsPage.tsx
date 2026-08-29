@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Briefcase, LogOut } from "lucide-react";
 import { exitPosition, fetchTradeBlotter } from "../api/client";
 import type { WatchlistOpenPosition } from "../types";
+import { AppPageShell } from "../components/AppPageShell";
 import { formatUsd, formatLotsLabel } from "../utils/money";
 
 function formatTs(ts: string | null | undefined) {
@@ -85,14 +86,11 @@ export function HoldingsPage() {
   };
 
   return (
-    <>
-      <div className="page-header">
-        <h2>Holdings</h2>
-        <p>
-          Open positions with live LTP · manual exit squares off at current premium ·
-          auto-refresh 3s
-        </p>
-      </div>
+    <AppPageShell
+      title="Positions"
+      icon={Briefcase}
+      description="Open positions with live LTP · manual exit at current premium · auto-refresh 3s"
+    >
 
       {error && <div className="error-banner">{error}</div>}
       {flash && (
@@ -184,6 +182,6 @@ export function HoldingsPage() {
           </table>
         )}
       </div>
-    </>
+    </AppPageShell>
   );
 }

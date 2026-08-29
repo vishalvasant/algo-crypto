@@ -1,5 +1,6 @@
 import type {
   AuthUser,
+  ChartCandlesResponse,
   DecisionLogEvent,
   EngineHealth,
   LoginResponse,
@@ -173,6 +174,23 @@ export function reauthenticate(force = true): Promise<{
 
 export function fetchWatchlist(): Promise<Watchlist> {
   return request<Watchlist>("/watchlist");
+}
+
+export function fetchChartCandles(
+  underlying: string,
+  interval = "5m",
+  days = 30,
+  opts?: { token?: string; exchange?: string; tsym?: string },
+): Promise<ChartCandlesResponse> {
+  const params = new URLSearchParams({
+    underlying,
+    interval,
+    days: String(days),
+  });
+  if (opts?.token) params.set("token", opts.token);
+  if (opts?.exchange) params.set("exchange", opts.exchange);
+  if (opts?.tsym) params.set("tsym", opts.tsym);
+  return request<ChartCandlesResponse>(`/chart/candles?${params}`);
 }
 
 export function fetchTradeBlotter(limit = 20): Promise<TradeBlotter> {
