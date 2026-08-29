@@ -32,10 +32,17 @@ reversal_require_structure: false
 reversal_require_volume: false
 reversal_min_confirmation_score: 65
 
-trail_giveback_pct: 40
+trail_giveback_pct: 50
+# Tighter giveback once MFE is very large — lock more of a big runner.
+trail_giveback_pct_large_mfe: 35
+large_mfe_trail_pct: 22
 adverse_move_pct_from_entry: 14
-# Arm trail once unrealized premium gain ≥ this % of entry (was 18 — too high).
-min_profit_before_trail_pct: 5
+# Arm trail only after meaningful premium extension (not 5% noise).
+min_profit_before_trail_pct: 12
+# Fee-aware trail: don't arm/exit for scraps that fees will erase.
+trail_fee_aware: true
+trail_min_gross_profit_usd: 1.25
+trail_min_net_profit_usd: 0.85
 min_hold_seconds: 90
 max_hold_minutes: 30
 high_vol_trail_giveback_pct: 35

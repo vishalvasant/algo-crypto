@@ -148,20 +148,50 @@ def test_min_hold_blocks_immediate_reversal():
 
 
 def test_trail_before_reversal_on_moderate_profit():
-  """Trail arms at 5% MFE and exits before underwater reversal."""
+  """Trail arms at 12% MFE and exits on giveback."""
   entry_ts = datetime.now(tz=timezone.utc) - timedelta(seconds=120)
   decision = evaluate_momentum_exit(
     option_side="CE",
     entry_price=Decimal("100"),
     entry_ts=entry_ts,
-    current_ltp=Decimal("103"),
-    mfe_points=Decimal("6"),
+    current_ltp=Decimal("110"),
+    mfe_points=Decimal("13"),
     market_data=_md(spot=Decimal("24200"), vwap=Decimal("24150")),
-    cfg=_cfg(min_profit_before_trail_pct=5, trail_giveback_pct=40),
+    cfg=_cfg(min_profit_before_trail_pct=12, trail_giveback_pct=50),
     force_exit=False,
   )
   assert decision.should_exit
   assert decision.reason == "momentum_trail"
+
+
+def test_fee_aware_trail_blocks_exit_when_net_too_small():
+  """Don't trail-exit if gross win is eaten by round-trip fees."""
+  entry_ts = datetime.now(tz=timezone.utc) - timedelta(seconds=120)
+  fees_cfg = {
+    "options_taker_rate": 0.0003,
+    "premium_fee_cap_pct": 3.5,
+    "gst_pct": 18.0,
+  }
+  decision = evaluate_momentum_exit(
+    option_side="CE",
+    entry_price=Decimal("290"),
+    entry_ts=entry_ts,
+    current_ltp=Decimal("301"),
+    mfe_points=Decimal("15"),
+    market_data=_md(spot=Decimal("77800"), vwap=Decimal("77700")),
+    cfg=_cfg(
+      min_profit_before_trail_pct=5,
+      trail_giveback_pct=40,
+      trail_fee_aware=True,
+      trail_min_gross_profit_usd=1.25,
+      trail_min_net_profit_usd=0.85,
+    ),
+    force_exit=False,
+    lots=25,
+    contract_size=Decimal("0.001"),
+    fees_cfg=fees_cfg,
+  )
+  assert not decision.should_exit
 
 
 def test_large_profit_trail_exits_on_giveback():

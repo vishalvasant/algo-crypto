@@ -37,6 +37,60 @@ def _trend_reversal_triggered(
   return False
 
 
+def _gross_pnl_usd(
+  entry_price: Decimal,
+  ltp: Decimal,
+  lots: int,
+  contract_size: Decimal,
+) -> Decimal:
+  if lots <= 0 or contract_size <= 0:
+    return Decimal("0")
+  return (ltp - entry_price) * Decimal(lots) * contract_size
+
+
+def _estimate_round_trip_fees_usd(
+  *,
+  spot: Decimal,
+  entry_price: Decimal,
+  exit_ltp: Decimal,
+  lots: int,
+  contract_size: Decimal,
+  fees_cfg: dict,
+  entry_fee_usd: Decimal,
+) -> Decimal:
+  from algocrypto.fees import option_fee
+
+  if spot <= 0 or lots <= 0 or contract_size <= 0:
+    return entry_fee_usd
+  entry_fee = entry_fee_usd
+  if entry_fee <= 0:
+    entry_fee = option_fee(
+      spot=spot,
+      premium=entry_price,
+      lots=lots,
+      contract_size=contract_size,
+      fees_cfg=fees_cfg,
+    ).total_fee_usd
+  exit_fee = option_fee(
+    spot=spot,
+    premium=exit_ltp,
+    lots=lots,
+    contract_size=contract_size,
+    fees_cfg=fees_cfg,
+  ).total_fee_usd
+  return entry_fee + exit_fee
+
+
+def _trail_giveback_pct(cfg: dict, trail_key: str, trail_default: int, mfe_points: Decimal, entry_price: Decimal) -> Decimal:
+  giveback_pct = Decimal(str(cfg.get(trail_key, trail_default))) / Decimal("100")
+  large_mfe_pct = Decimal(str(cfg.get("large_mfe_trail_pct", 0))) / Decimal("100")
+  if large_mfe_pct > 0 and entry_price > 0 and mfe_points >= entry_price * large_mfe_pct:
+    tight = cfg.get("trail_giveback_pct_large_mfe")
+    if tight is not None:
+      giveback_pct = Decimal(str(tight)) / Decimal("100")
+  return giveback_pct
+
+
 def evaluate_momentum_exit(
   *,
   option_side: str,
@@ -50,6 +104,10 @@ def evaluate_momentum_exit(
   regime_primary: str | None = None,
   now: datetime | None = None,
   atr: Decimal | None = None,
+  lots: int = 0,
+  contract_size: Decimal | None = None,
+  entry_fee_usd: Decimal = Decimal("0"),
+  fees_cfg: dict | None = None,
 ) -> ExitDecision:
   if force_exit:
     return ExitDecision(True, "force_exit")
@@ -94,10 +152,36 @@ def evaluate_momentum_exit(
     return ExitDecision(True, "adverse_momentum")
 
   min_profit_pct = Decimal(str(cfg.get("min_profit_before_trail_pct", 18))) / Decimal("100")
-  giveback_pct = Decimal(str(cfg.get(trail_key, trail_default))) / Decimal("100")
-  if mfe_points > 0 and mfe_points >= entry_price * min_profit_pct:
+  giveback_pct = _trail_giveback_pct(cfg, trail_key, trail_default, mfe_points, entry_price)
+  size = contract_size if contract_size is not None and contract_size > 0 else Decimal("0")
+  fee_aware = bool(cfg.get("trail_fee_aware", False)) and lots > 0 and size > 0
+  min_gross_usd = Decimal(str(cfg.get("trail_min_gross_profit_usd", 0)))
+  min_net_usd = Decimal(str(cfg.get("trail_min_net_profit_usd", 0)))
+  fees = fees_cfg or {}
+
+  trail_armed = mfe_points > 0 and mfe_points >= entry_price * min_profit_pct
+  if trail_armed and fee_aware and min_gross_usd > 0:
+    peak_gross = _gross_pnl_usd(entry_price, entry_price + mfe_points, lots, size)
+    if peak_gross < min_gross_usd:
+      trail_armed = False
+
+  if trail_armed:
     trail_floor = entry_price + mfe_points * (Decimal("1") - giveback_pct)
     if current_ltp <= trail_floor:
+      if fee_aware and min_net_usd > 0:
+        spot = market_data.spot_ltp or Decimal("0")
+        gross = _gross_pnl_usd(entry_price, current_ltp, lots, size)
+        fees_total = _estimate_round_trip_fees_usd(
+          spot=spot,
+          entry_price=entry_price,
+          exit_ltp=current_ltp,
+          lots=lots,
+          contract_size=size,
+          fees_cfg=fees,
+          entry_fee_usd=entry_fee_usd,
+        )
+        if gross - fees_total < min_net_usd:
+          return ExitDecision(False)
       return ExitDecision(True, "momentum_trail")
 
   if cfg.get("bias_flip_exit", True):

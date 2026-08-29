@@ -301,6 +301,10 @@ class PositionManager:
         force_exit=force,
         regime_primary=self._regime_primary,
         atr=atr,
+        lots=pos.quantity,
+        contract_size=pos.contract_size,
+        entry_fee_usd=pos.entry_fee_usd,
+        fees_cfg=self._config.fees or {},
       )
       # Phase 6: thesis degradation (after min hold; configurable threshold)
       if not decision.should_exit and pos.thesis is not None:
