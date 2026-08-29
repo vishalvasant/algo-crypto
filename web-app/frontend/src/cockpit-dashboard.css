@@ -1386,32 +1386,7 @@
 .global-meta-item .meta-v { font-size: 0.72rem; font-weight: 600; }
 .global-meta-divider { width: 1px; height: 18px; background: var(--border); }
 .global-meta-clock { font-size: 0.7rem; line-height: 1; white-space: nowrap; }
-.global-top-engine { display: inline-flex; align-items: center; gap: 3px; }
-.header-ctl { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-muted); }
-.header-ctl:hover { border-color: var(--border-bright); color: var(--text); }
-.header-ctl.on { border-color: rgba(245, 158, 11, 0.45); color: var(--accent); }
-.header-ctl-mode {
-  width: auto;
-  min-width: 68px;
-  padding: 0 0.45rem;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.28rem;
-  font-size: 0.58rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-}
-.header-ctl-mode.paper {
-  border-color: rgba(120, 170, 255, 0.45);
-  color: #8cb4ff;
-}
-.header-ctl-mode.live {
-  border-color: rgba(255, 120, 120, 0.55);
-  color: #ff8f8f;
-  background: rgba(255, 77, 77, 0.08);
-}
-.header-ctl.danger.on { border-color: rgba(255, 77, 77, 0.5); color: var(--danger); }
-.header-ctl.danger:hover { border-color: rgba(255, 77, 77, 0.45); color: var(--danger); }
+/* Header engine controls — canonical styles in ref-layout.css */
 .risk-driver-caption {
   font-size: 0.62rem;
   text-align: center;

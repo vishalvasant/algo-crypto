@@ -217,8 +217,80 @@
 .global-top-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex-shrink: 0;
+  height: 100%;
+}
+
+.global-status-cluster {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  line-height: 1.15;
+  min-width: 0;
+}
+
+.global-status-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
+.global-status-row .meta-v {
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.global-meta-sep {
+  color: var(--border-bright);
+  font-weight: 500;
+}
+
+.meta-feed {
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.meta-feed.live {
+  color: var(--success);
+}
+
+.broker-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.broker-dot.on {
+  background: var(--success);
+  box-shadow: 0 0 6px var(--success);
+}
+
+.broker-dot.off {
+  background: var(--danger);
+}
+
+.global-meta-clock {
+  font-size: 0.7rem;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.global-meta-clock .clock-tz {
+  color: var(--text-muted);
+  font-size: 0.58rem;
+  margin-left: 0.2rem;
+  letter-spacing: 0.04em;
+}
+
+.global-menu-btn {
+  display: none;
 }
 
 .global-broker-pill {
@@ -269,6 +341,12 @@
   gap: 4px;
 }
 
+.global-top-engine {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
 .header-ctl {
   width: 28px;
   height: 28px;
@@ -279,6 +357,8 @@
   display: grid;
   place-items: center;
   transition: color 0.12s, border-color 0.12s, background 0.12s;
+  cursor: pointer;
+  padding: 0;
 }
 
 .header-ctl:hover:not(:disabled) {
@@ -287,20 +367,74 @@
   background: var(--bg-hover);
 }
 
-.header-ctl-on {
-  color: var(--accent);
-  border-color: rgba(245, 158, 11, 0.45);
-  background: var(--accent-dim);
+.header-ctl:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
-.header-ctl-danger-on {
+.header-ctl.on {
+  border-color: rgba(52, 211, 153, 0.45);
+  color: var(--success);
+  background: var(--success-dim);
+}
+
+.header-ctl.danger.on {
+  border-color: rgba(255, 77, 77, 0.5);
   color: var(--danger);
-  border-color: rgba(248, 113, 113, 0.45);
   background: var(--danger-dim);
 }
 
-.mobile-menu-btn {
-  display: none;
+.header-ctl.danger:hover:not(:disabled) {
+  border-color: rgba(255, 77, 77, 0.45);
+  color: var(--danger);
+}
+
+.header-ctl-mode {
+  width: auto;
+  min-width: 68px;
+  padding: 0 0.45rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  cursor: default;
+}
+
+.header-ctl-mode.paper {
+  border-color: rgba(120, 170, 255, 0.45);
+  color: #8cb4ff;
+}
+
+.header-ctl-mode.live {
+  border-color: rgba(255, 120, 120, 0.55);
+  color: #ff8f8f;
+  background: rgba(255, 77, 77, 0.08);
+}
+
+.header-ctl-auto {
+  width: auto;
+  min-width: 58px;
+  padding: 0 0.4rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.header-ctl-auto.on {
+  border-color: rgba(52, 211, 153, 0.45);
+  color: var(--success);
+  background: rgba(52, 211, 153, 0.08);
+}
+
+.header-ctl-auto.warn {
+  border-color: rgba(255, 170, 60, 0.45);
+  color: #ffc46b;
+  background: rgba(255, 170, 60, 0.08);
 }
 
 /* Sidebar nav */
@@ -524,7 +658,7 @@
     --sidebar-w: 248px;
   }
 
-  .mobile-menu-btn {
+  .global-menu-btn {
     display: grid;
   }
 
@@ -566,5 +700,37 @@
 
   .global-top-meta .global-feed-pill {
     display: none;
+  }
+
+  .ref-layout .global-status-cluster .global-status-row {
+    display: none;
+  }
+
+  .ref-layout .global-top-meta {
+    gap: 0.35rem;
+  }
+
+  .ref-layout .global-meta-clock {
+    font-size: 0.62rem;
+  }
+
+  .ref-layout .global-meta-clock .clock-tz {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .ref-layout .global-top-engine .header-ctl:nth-child(4),
+  .ref-layout .global-top-engine .header-ctl:nth-child(5),
+  .ref-layout .global-top-engine .header-ctl:nth-child(6) {
+    display: none;
+  }
+
+  .ref-layout .global-avatar {
+    display: none;
+  }
+
+  .ref-layout .global-index-card {
+    min-width: 96px;
   }
 }

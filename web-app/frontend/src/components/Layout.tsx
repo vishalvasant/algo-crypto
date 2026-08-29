@@ -156,9 +156,16 @@ export function Layout() {
         marketOpen={watchlist?.market_open ?? summary?.market_open}
         marketSession={summary?.market_session}
         feedMode={watchlist?.feed_mode ?? summary?.feed_mode}
+        wsOpen={summary?.ws_open ?? watchlist?.ws_open}
+        wsQuoteAgeSec={summary?.ws_quote_age_sec ?? watchlist?.ws_quote_age_sec}
+        quoteAgeSec={summary?.quote_age_sec ?? watchlist?.quote_age_sec}
         onMenuToggle={() => setSidebarOpen((open) => !open)}
         engineControls={
-          <CockpitEngineControls onDataRefresh={refreshDashboardData} brokerName="Delta" />
+          <CockpitEngineControls
+            onDataRefresh={refreshDashboardData}
+            onLogout={handleLogout}
+            brokerName="Delta"
+          />
         }
       />
 

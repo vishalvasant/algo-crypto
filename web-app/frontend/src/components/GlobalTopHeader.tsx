@@ -1,6 +1,7 @@
 import { Menu } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useAuth } from "../auth/AuthContext";
+import { describeFeedMode } from "../utils/feedMode";
 
 export interface CryptoQuote {
   symbol: string;
@@ -19,6 +20,9 @@ interface GlobalTopHeaderProps {
   marketOpen?: boolean;
   marketSession?: string | null;
   feedMode?: string | null;
+  wsOpen?: boolean | null;
+  wsQuoteAgeSec?: number | null;
+  quoteAgeSec?: number | null;
   onMenuToggle?: () => void;
   engineControls?: ReactNode;
 }
@@ -41,6 +45,9 @@ export function GlobalTopHeader({
   marketOpen = false,
   marketSession,
   feedMode,
+  wsOpen,
+  wsQuoteAgeSec,
+  quoteAgeSec,
   onMenuToggle,
   engineControls,
 }: GlobalTopHeaderProps) {
@@ -66,13 +73,19 @@ export function GlobalTopHeader({
     }
   }, [quotes]);
 
-  const sessionLabel = marketSession ?? (marketOpen ? "OPEN" : "CLOSED");
+  const sessionLabel = (marketSession ?? (marketOpen ? "OPEN" : "CLOSED")).toUpperCase();
+  const feedView = describeFeedMode(feedMode, wsOpen, wsQuoteAgeSec, quoteAgeSec);
 
   return (
     <header className="global-top-header">
       <div className="global-top-brand">
         {onMenuToggle ? (
-          <button type="button" className="header-ctl mobile-menu-btn" onClick={onMenuToggle} aria-label="Menu">
+          <button
+            type="button"
+            className="header-ctl global-menu-btn"
+            onClick={onMenuToggle}
+            aria-label="Toggle navigation"
+          >
             <Menu size={18} />
           </button>
         ) : null}
@@ -87,21 +100,23 @@ export function GlobalTopHeader({
       </div>
 
       <div className="global-top-center">
-        <div className="global-top-indices">
+        <div className="global-top-indices" role="list">
           {quotes.map((q) => {
             const isActive = q.symbol === active;
             const flash = priceFlash[q.symbol];
+            const disabled = q.symbol === "ETH";
             return (
               <button
                 key={q.symbol}
                 type="button"
-                className={`global-index-card${isActive ? " active" : ""}${flash ? ` price-flash-${flash}` : ""}`}
+                role="listitem"
+                className={`global-index-card${isActive ? " active" : ""}${flash ? ` price-flash-${flash}` : ""}${disabled ? " display-only" : ""}`}
                 onClick={() => {
-                  if (q.symbol === "ETH") return;
-                  onChange(q.symbol);
+                  if (!disabled) onChange(q.symbol);
                 }}
-                disabled={q.symbol === "ETH"}
-                title={q.symbol === "ETH" ? "ETH options chain not configured yet" : undefined}
+                disabled={disabled}
+                title={disabled ? "ETH options chain not configured yet" : `Trade ${q.label}`}
+                aria-pressed={!disabled ? isActive : undefined}
               >
                 <div className="global-index-top">
                   <span className="global-index-name">{q.label}</span>
@@ -115,13 +130,31 @@ export function GlobalTopHeader({
       </div>
 
       <div className="global-top-meta">
-        <span className={`global-broker-pill${brokerConnected ? " on" : ""}`}>
-          {brokerName} {brokerConnected ? "LIVE" : "OFF"}
-        </span>
-        {feedMode ? <span className="global-feed-pill mono">{feedMode.toUpperCase()}</span> : null}
-        {clock ? <span className="global-top-clock mono">{clock} IST</span> : null}
+        <div
+          className="global-status-cluster"
+          title={`${brokerName} · ${feedView.detail}`}
+        >
+          <span className="global-status-row">
+            <span className={`broker-dot ${brokerConnected ? "on" : "off"}`} />
+            <span className="meta-v">{brokerName}</span>
+            <span className="global-meta-sep">·</span>
+            <span className={`meta-feed ${feedView.tone === "live" ? "live" : ""}`}>
+              {feedView.label}
+            </span>
+          </span>
+          {clock ? (
+            <span className="global-meta-clock mono" title="Asia/Kolkata">
+              {clock}
+              <span className="clock-tz"> IST</span>
+            </span>
+          ) : null}
+        </div>
+
         {engineControls}
-        <div className="global-avatar" title={username ?? ""}>{initials}</div>
+
+        <span className="global-avatar" title={username ?? "User"}>
+          {initials}
+        </span>
       </div>
     </header>
   );
