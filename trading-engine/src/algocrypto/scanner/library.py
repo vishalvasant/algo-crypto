@@ -119,18 +119,38 @@ def _emit(
 def _vwap_reclaim_aligned(features: FeatureSnapshot, setup: str) -> bool:
   if not features.setup_3m or not features.trigger_1m:
     return False
+  extra = features.extra or {}
+  structure = str(extra.get("structure_5m") or "")
+  require_struct = bool(extra.get("require_5m_structure_reclaim", False))
   if setup == "bull":
+    if require_struct and structure not in ("hhhl", "mixed"):
+      return False
     return (
       features.bias_5m == Bias.BULLISH
       and features.setup_3m == "vwap_reclaim_bull"
       and features.trigger_1m == "vwap_reclaim_cross_up"
     )
   if setup == "bear":
+    if require_struct and structure not in ("lllh", "mixed"):
+      return False
     return (
       features.bias_5m == Bias.BEARISH
       and features.setup_3m == "vwap_reclaim_bear"
       and features.trigger_1m == "vwap_reclaim_cross_down"
     )
+  return False
+
+
+def _vwap_pullback_aligned(features: FeatureSnapshot) -> bool:
+  extra = features.extra or {}
+  setup = extra.get("setup_vwap_pullback")
+  trigger = extra.get("trigger_vwap_pullback")
+  if not setup or not trigger:
+    return False
+  if features.bias_5m == Bias.BULLISH:
+    return setup == "vwap_pullback_bull" and trigger == "vwap_pullback_bounce_up"
+  if features.bias_5m == Bias.BEARISH:
+    return setup == "vwap_pullback_bear" and trigger == "vwap_pullback_bounce_down"
   return False
 
 
@@ -165,6 +185,9 @@ class FeatureSetupScanner:
         return None
 
     if self.name == "vwap_reclaim" and not _vwap_reclaim_aligned(features, setup):
+      return None
+
+    if self.name == "vwap_pullback" and not _vwap_pullback_aligned(features):
       return None
 
     # mean_reversion: bull = fade down → CE, bear = fade up → PE

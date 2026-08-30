@@ -4,7 +4,7 @@ from datetime import datetime, time, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from algocrypto.config import AppConfig
+from algocrypto.features.crypto_scaling import atr_threshold
 from algocrypto.models.events import Bias, Candle, FeatureSnapshot, MarketRegime
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -87,7 +87,12 @@ class RegimeClassifier:
         scores["low_volatility"] += 8
         scores["high_volatility"] += 8
 
-    sideways_pts = Decimal(str(self._cfg.get("sideways_range_points", 25)))
+    sideways_pts = atr_threshold(
+      atr,
+      points=self._cfg.get("sideways_range_points"),
+      atr_mult=self._cfg.get("sideways_range_atr_mult"),
+      default_points=25,
+    ) or Decimal("25")
     if len(m5) >= 4:
       window = m5[-6:]
       hi = max(c.high for c in window)
@@ -118,7 +123,13 @@ class RegimeClassifier:
 
     # Breakout heuristic: stretch from VWAP + rising ATR
     dist = extra.get("distance_to_vwap_points")
-    if dist is not None and abs(float(dist)) >= 20 and features.bias_5m != Bias.NEUTRAL:
+    breakout_thr = atr_threshold(
+      atr,
+      points=self._cfg.get("breakout_distance_points"),
+      atr_mult=self._cfg.get("breakout_distance_atr"),
+      default_points=20,
+    ) or Decimal("20")
+    if dist is not None and abs(float(dist)) >= float(breakout_thr) and features.bias_5m != Bias.NEUTRAL:
       scores["breakout"] += 20
       reasons.append("extended_from_vwap")
 

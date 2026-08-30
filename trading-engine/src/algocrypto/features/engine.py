@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from algocrypto.config import AppConfig
+from algocrypto.features.crypto_scaling import atr_threshold
 from algocrypto.features.indicators import (
   aggregate_from_m5,
   cpr_levels,
@@ -25,6 +26,7 @@ class FeatureEngine:
     self._reclaim = config.strategy.get("vwap_reclaim", {})
     self._pullback = config.strategy.get("vwap_pullback", {})
     self._vwap_bias = config.strategy.get("vwap_bias", {})
+    self._crypto_scale = config.strategy.get("crypto_scaling", {})
     # Prior day OHLC for CPR / PDH / PDL / gap (set by orchestrator/backtest).
     self.prior_high: Decimal | None = None
     self.prior_low: Decimal | None = None
@@ -74,12 +76,18 @@ class FeatureEngine:
       )
 
     lookback = int(self._reclaim.get("setup_lookback_bars", 5))
-    max_dist = Decimal(str(self._reclaim.get("max_distance_to_vwap_points", 15)))
+    use_atr = bool(self._crypto_scale.get("use_atr_relative", True))
+    max_dist = atr_threshold(
+      atr,
+      points=self._reclaim.get("max_distance_to_vwap_points"),
+      atr_mult=self._crypto_scale.get("max_distance_to_vwap_atr"),
+      default_points=28,
+    ) or Decimal("28")
     trigger_lb = int(self._reclaim.get("trigger_lookback_bars", 3))
     max_fresh = int(self._reclaim.get("max_fresh_trigger_bars", 1))
     min_bars_with = int(self._reclaim.get("min_bars_with_vwap_3m", 0))
 
-    setup_3m = _detect_reclaim(m3, vwap, lookback) if vwap else None
+    setup_3m = _detect_reclaim_recent(m3, vwap, lookback) if vwap else None
     trigger_1m = (
       _detect_reclaim_trigger(m1, vwap, trigger_lb, max_fresh_bars=max_fresh)
       if vwap
@@ -97,43 +105,96 @@ class FeatureEngine:
     elif trigger_1m == "vwap_reclaim_cross_down" and bias != Bias.BEARISH:
       trigger_1m = None
 
+    # Crypto: fresh 1m cross + recent 3m on wrong side counts as reclaim setup.
+    if (
+      use_atr
+      and trigger_1m
+      and setup_3m is None
+      and m3
+      and vwap is not None
+    ):
+      w = m3[-lookback:] if len(m3) >= lookback else m3
+      if trigger_1m == "vwap_reclaim_cross_up" and bias == Bias.BULLISH:
+        if any(b.close < vwap for b in w):
+          setup_3m = "vwap_reclaim_bull"
+      elif trigger_1m == "vwap_reclaim_cross_down" and bias == Bias.BEARISH:
+        if any(b.close > vwap for b in w):
+          setup_3m = "vwap_reclaim_bear"
+
     # Distance gate for reclaim setup (proximity to VWAP)
     if setup_3m and spot is not None and vwap is not None:
       dist = abs(spot - vwap)
       if dist > max_dist:
         setup_3m = None
-      elif min_bars_with > 0 and _bars_with_vwap(m3, vwap, bias) < min_bars_with:
+      elif (
+        min_bars_with > 0
+        and not trigger_1m
+        and _bars_with_vwap(m3, vwap, bias) < min_bars_with
+      ):
         setup_3m = None
 
     pullback_setup = None
+    pullback_trigger = None
     if vwap and spot is not None:
+      pb_min_ext = atr_threshold(
+        atr,
+        points=self._pullback.get("min_extension_points"),
+        atr_mult=self._crypto_scale.get("pullback_min_extension_atr"),
+        default_points=5,
+      ) or Decimal("5")
+      pb_max_dist = atr_threshold(
+        atr,
+        points=self._pullback.get("max_distance_to_vwap_points"),
+        atr_mult=self._crypto_scale.get("pullback_max_distance_atr"),
+        default_points=30,
+      ) or Decimal("30")
       pullback_setup = _detect_pullback(
         m3,
         vwap,
         bias,
         lookback=int(self._pullback.get("setup_lookback_bars", 8)),
-        min_extension=Decimal(str(self._pullback.get("min_extension_points", 8))),
-        max_distance=Decimal(str(self._pullback.get("max_distance_to_vwap_points", 12))),
+        min_extension=pb_min_ext,
+        max_distance=pb_max_dist,
       )
-
-    pullback_trigger = _detect_pullback_trigger(
-      m1,
-      vwap,
-      bias,
-      lookback=int(self._pullback.get("trigger_lookback_bars", 3)),
-    ) if vwap else None
+      pullback_trigger = _detect_pullback_trigger(
+        m1,
+        vwap,
+        bias,
+        lookback=int(self._pullback.get("trigger_lookback_bars", 3)),
+        max_near_vwap=pb_max_dist,
+      )
+      if pullback_setup and not pullback_trigger:
+        pullback_trigger = _detect_pullback_trigger(
+          m1,
+          vwap,
+          bias,
+          lookback=int(self._pullback.get("trigger_lookback_bars", 3)),
+          max_near_vwap=pb_max_dist * Decimal("2"),
+        )
 
     trend_cfg = self._config.strategy.get("vwap_trend", {})
     trend_setup = None
     if vwap and spot is not None:
+      tr_min = atr_threshold(
+        atr,
+        points=trend_cfg.get("min_distance_to_vwap_points"),
+        atr_mult=self._crypto_scale.get("trend_min_distance_atr"),
+        default_points=3,
+      ) or Decimal("3")
+      tr_max = atr_threshold(
+        atr,
+        points=trend_cfg.get("max_distance_to_vwap_points"),
+        atr_mult=self._crypto_scale.get("trend_max_distance_atr"),
+        default_points=50,
+      ) or Decimal("50")
       trend_setup = _detect_trend_continuation(
         m3,
         m1,
         vwap,
         bias,
         min_bars=int(trend_cfg.get("min_bars_on_side", 3)),
-        min_distance=Decimal(str(trend_cfg.get("min_distance_to_vwap_points", 3))),
-        max_distance=Decimal(str(trend_cfg.get("max_distance_to_vwap_points", 50))),
+        min_distance=tr_min,
+        max_distance=tr_max,
         require_momentum=bool(trend_cfg.get("require_1m_momentum", True)),
       )
 
@@ -243,7 +304,10 @@ class FeatureEngine:
       "bars_against_vwap_3m": bars_against,
       "bars_with_vwap_3m": bars_with,
       "max_distance_to_vwap_points": float(max_dist),
+      "max_distance_to_vwap_atr_mult": float(self._crypto_scale.get("max_distance_to_vwap_atr") or 0),
+      "atr_1m": float(atr) if atr is not None else None,
       "setup_lookback_bars": lookback,
+      "require_5m_structure_reclaim": bool(self._reclaim.get("require_5m_structure", False)),
       "skip_reasons": skip_reasons,
       "candle_counts": {
         "m1": len(m1),
@@ -316,6 +380,26 @@ def _detect_reclaim(
   return None
 
 
+def _detect_reclaim_recent(
+  bars: list[Candle],
+  vwap: Decimal,
+  lookback: int,
+) -> str | None:
+  """Reclaim on current 3m bar or any bar in the recent window (crypto timing)."""
+  found = _detect_reclaim(bars, vwap, lookback)
+  if found:
+    return found
+  if len(bars) < 3:
+    return None
+  window = bars[-lookback:] if len(bars) >= lookback else bars
+  for end in range(len(window) - 1, 0, -1):
+    sub = window[: end + 1]
+    label = _detect_reclaim(sub, vwap, len(sub))
+    if label:
+      return label
+  return None
+
+
 def _detect_reclaim_trigger(
   bars: list[Candle],
   vwap: Decimal,
@@ -361,13 +445,15 @@ def _detect_pullback(
     if curr < vwap:
       return None
     extended = any(b.close >= vwap + min_extension for b in window[:-1])
-    if extended and curr <= vwap + max_distance:
+    pulling_back = len(window) >= 2 and abs(curr - vwap) < abs(window[-2].close - vwap)
+    if extended and (dist <= max_distance or pulling_back):
       return "vwap_pullback_bull"
   elif bias == Bias.BEARISH:
     if curr > vwap:
       return None
     extended = any(b.close <= vwap - min_extension for b in window[:-1])
-    if extended and curr >= vwap - max_distance:
+    pulling_back = len(window) >= 2 and abs(curr - vwap) < abs(window[-2].close - vwap)
+    if extended and (dist <= max_distance or pulling_back):
       return "vwap_pullback_bear"
   return None
 
@@ -378,6 +464,7 @@ def _detect_pullback_trigger(
   bias: Bias,
   *,
   lookback: int,
+  max_near_vwap: Decimal | None = None,
 ) -> str | None:
   """Bounce confirmation: latest 1m turns back in trend direction near VWAP."""
   if vwap is None or bias == Bias.NEUTRAL or len(bars) < 2:
@@ -387,9 +474,10 @@ def _detect_pullback_trigger(
     return None
   prev = window[-2].close
   curr = window[-1].close
-  if bias == Bias.BULLISH and curr > prev and curr >= vwap:
+  near = max_near_vwap if max_near_vwap is not None else Decimal("999999")
+  if bias == Bias.BULLISH and curr > prev and curr >= vwap and abs(curr - vwap) <= near:
     return "vwap_pullback_bounce_up"
-  if bias == Bias.BEARISH and curr < prev and curr <= vwap:
+  if bias == Bias.BEARISH and curr < prev and curr <= vwap and abs(curr - vwap) <= near:
     return "vwap_pullback_bounce_down"
   return None
 

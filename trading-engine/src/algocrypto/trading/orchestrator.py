@@ -24,6 +24,7 @@ from algocrypto.models.events import (
   Bias,
   CandidateSignal,
   CandleInterval,
+  MarketRegime,
   OptionState,
   QuoteUpdate,
   SystemEvent,
@@ -440,6 +441,20 @@ class TradingOrchestrator:
         pullback=(features.extra or {}).get("setup_vwap_pullback"),
         pe_ltp=str(pe_state.ltp) if pe_state and pe_state.ltp is not None else None,
         ce_ltp=str(ce_state.ltp) if ce_state and ce_state.ltp is not None else None,
+      )
+      return
+
+    from algocrypto.features.crypto_scaling import crypto_entry_allowed
+
+    allowed, gate_reason = crypto_entry_allowed(
+      self._config.strategy, features, regime, signal
+    )
+    if not allowed:
+      logger.info(
+        "entry_skipped_crypto_gate",
+        setup=signal.setup_type,
+        side=signal.side,
+        reason=gate_reason,
       )
       return
 

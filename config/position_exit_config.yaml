@@ -1,56 +1,44 @@
-# Exit when momentum / structure turns unfavorable (not fixed $ SL/target).
-# Priority: time stop → adverse drop → trail → trend/bias reversal (guarded).
+# Crypto momentum exits — avoid NSE-style VWAP reversal chop on 24/7 BTC.
 mode: momentum
-bias_flip_exit: true
-# Spot must clear VWAP by this many points before trend_reversal (legacy fallback).
-bias_flip_buffer_points: 12
-# Prefer ATR-relative buffer when ATR is available (wider = fewer VWAP whipsaws).
-bias_flip_atr_multiplier: 0.55
+bias_flip_exit: false
+bias_flip_buffer_points: 25
+bias_flip_atr_multiplier: 0.65
 
-# --- Trend reversal guards (hold longer, don't bail winners on noise) ---
-# Separate min hold before bias-flip exit (can exceed general min_hold_seconds).
-trend_reversal_min_hold_seconds: 120
-# Use last 1m close (not tick spot) for reversal — avoids intrabar flicker.
+trend_reversal_min_hold_seconds: 180
 trend_reversal_require_m1_close: true
-# Skip reversal when premium is in profit by this % — let trail manage winners.
-trend_reversal_defer_profit_pct: 3
-# Only fire reversal when underwater (thesis failed, not just noise).
+trend_reversal_defer_profit_pct: 5
 trend_reversal_only_if_underwater: true
 
-# --- Reversal flips (disabled — caused CE↔PE chop in paper session) ---
 flip_on_trend_reversal: false
 flip_requires_confirmation: true
-flip_cooldown_seconds: 300
+flip_cooldown_seconds: 600
 flip_use_quality_gate: true
-flip_min_rule_score: 80
+flip_min_rule_score: 85
 
-reversal_vwap_distance_atr_multiplier: 0.45
+reversal_vwap_distance_atr_multiplier: 0.55
 reversal_atr_lookback_bars: 14
 reversal_require_candle_close: true
 reversal_require_momentum: true
-reversal_require_structure: false
+reversal_require_structure: true
 reversal_require_volume: false
-reversal_min_confirmation_score: 65
+reversal_min_confirmation_score: 70
 
-trail_giveback_pct: 50
-# Tighter giveback once MFE is very large — lock more of a big runner.
-trail_giveback_pct_large_mfe: 35
-large_mfe_trail_pct: 22
-adverse_move_pct_from_entry: 14
-# Arm trail only after meaningful premium extension (not 5% noise).
-min_profit_before_trail_pct: 12
-# Fee-aware trail: don't arm/exit for scraps that fees will erase.
+trail_giveback_pct: 45
+trail_giveback_pct_large_mfe: 30
+large_mfe_trail_pct: 25
+adverse_move_pct_from_entry: 16
+min_profit_before_trail_pct: 14
 trail_fee_aware: true
-trail_min_gross_profit_usd: 1.25
-trail_min_net_profit_usd: 0.85
-min_hold_seconds: 90
-max_hold_minutes: 30
+trail_min_gross_profit_usd: 1.50
+trail_min_net_profit_usd: 1.00
+min_hold_seconds: 120
+max_hold_minutes: 20
 high_vol_trail_giveback_pct: 35
-high_vol_adverse_move_pct_from_entry: 12
+high_vol_adverse_move_pct_from_entry: 14
 
 thesis_exit_enabled: true
-thesis_degrade_below: 40
-thesis_min_hold_seconds: 90
+thesis_degrade_below: 35
+thesis_min_hold_seconds: 120
 
 dynamic_exits_enabled: true
-dynamic_adverse_atr_scale_cap: 0.35
+dynamic_adverse_atr_scale_cap: 0.40

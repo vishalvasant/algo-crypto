@@ -1,51 +1,53 @@
 active_scanner: router
-strategy_version: strategy_router_v2.0.0_institutional
+strategy_version: strategy_router_v2.1.0_crypto
 
-# Rule-based router (no LLM). Pick one strategy or NO_TRADE.
+# Rule-based router — crypto-tuned (BTC/ETH options on Delta).
 router:
-  # Rulebook §9 Valid tier starts at 75; paper tightened after chop session.
-  min_confidence: 78
+  min_confidence: 72
   log_every_decision: true
   enabled_strategies:
     - vwap_reclaim
-    - vwap_bounce
     - vwap_pullback
-    - vwap_rejection
-    - ema_pullback
-    - opening_range_breakout
-    - momentum_continuation
-    - trend_continuation
     - vwap_trend
-    - reversal
-    - cpr_breakout
-    - pdh_pdl_break
-    - oi_breakout
-    - delta_momentum
-    - gamma_expansion
-    - iv_expansion
-    - gap_and_go
-    - trend_day
-    - mean_reversion
-    - liquidity_sweep
-    # expiry_scalping only fires on expiry day; keep listed
-    - expiry_scalping
+    - trend_continuation
+
+# Sweet-zone entries: not hugging VWAP (chop) and not chasing extended moves.
+crypto_entry:
+  enabled: true
+  min_vwap_distance_atr: 0.04
+  max_vwap_distance_atr: 0.40
+  allowed_regimes:
+    - trending_up
+    - trending_down
+    - breakout
+
+# ATR-relative gates (BTC ~$77k — avoid NSE "points" misfit).
+crypto_scaling:
+  use_atr_relative: true
+  max_distance_to_vwap_atr: 0.12
+  pullback_min_extension_atr: 0.08
+  pullback_max_distance_atr: 0.18
+  trend_min_distance_atr: 0.04
+  trend_max_distance_atr: 0.45
 
 regime:
   high_vol_atr_mult: 1.4
   low_vol_atr_mult: 0.7
   atr_lookback_bars: 14
   sideways_range_points: 25
+  sideways_range_atr_mult: 0.35
+  breakout_distance_points: 20
+  breakout_distance_atr: 0.18
   structure_lookback_5m: 6
   block_sideways: true
   block_high_volatility: false
-  max_risk_score_to_trade: 80
+  max_risk_score_to_trade: 72
   opening_phase_minutes: 30
   late_phase_after_minutes: 330
 
-# Gap-Fix Phase 2: ATR-relative VWAP dead zone → NEUTRAL bias (no CE/PE flicker).
 vwap_bias:
   atr_lookback_bars: 14
-  dead_zone_atr_multiplier: 0.35
+  dead_zone_atr_multiplier: 0.40
 
 vwap_reclaim:
   bias_timeframe: 5m
@@ -53,41 +55,38 @@ vwap_reclaim:
   trigger_timeframe: 1m
   setup_lookback_bars: 8
   trigger_lookback_bars: 5
-  # Only accept 1m cross on the latest bar (no stale 5-bar-old triggers).
-  max_fresh_trigger_bars: 1
-  # Require reclaim side established on 3m before entry.
-  min_bars_with_vwap_3m: 2
-  max_distance_to_vwap_points: 28
+  max_fresh_trigger_bars: 3
+  min_bars_with_vwap_3m: 0
+  max_distance_to_vwap_points: 120
+  require_5m_structure: false
   neutral_bias_blocks_trade: true
 
 vwap_pullback:
   setup_timeframe: 3m
   trigger_timeframe: 1m
   setup_lookback_bars: 10
-  min_extension_points: 5
-  max_distance_to_vwap_points: 30
+  min_extension_points: 40
+  max_distance_to_vwap_points: 120
   trigger_lookback_bars: 4
   neutral_bias_blocks_trade: true
 
 vwap_trend:
   min_bars_on_side: 3
-  min_distance_to_vwap_points: 3
-  max_distance_to_vwap_points: 50
+  min_distance_to_vwap_points: 25
+  max_distance_to_vwap_points: 400
   require_1m_momentum: true
   neutral_bias_blocks_trade: true
 
-# Pick among ATM / ATM±1 using Black-Scholes delta/gamma + spread.
 strike_selection:
   enabled: true
   atm_band_steps: 1
   target_delta: 0.50
-  delta_min: 0.40
-  delta_max: 0.65
+  delta_min: 0.42
+  delta_max: 0.58
   prefer_higher_gamma: true
-  max_spread_pct: 8
-  vol_aware: true  # Gap-Fix Phase 5: IV/TTE score adjustments
+  max_spread_pct: 6
+  vol_aware: true
 
-# Gap-Fix Phase 5 — IV regime / RV / TTE
 vol_model:
   iv_slope_lookback: 10
   iv_expand_threshold: 0.02
@@ -96,28 +95,25 @@ vol_model:
   iv_expensive_rank: 80
   tte_adjustments:
     ">12h": { size_mult: 1.0, min_confidence_add: 0, max_hold_mult: 1.0 }
-    "4-12h": { size_mult: 1.0, min_confidence_add: 0, max_hold_mult: 1.0 }
-    "1-4h": { size_mult: 0.75, min_confidence_add: 5, max_hold_mult: 0.7 }
-    "30m-1h": { size_mult: 0.5, min_confidence_add: 10, max_hold_mult: 0.4 }
-    "<30m": { size_mult: 0.25, min_confidence_add: 15, max_hold_mult: 0.25 }
+    "4-12h": { size_mult: 0.85, min_confidence_add: 3, max_hold_mult: 0.85 }
+    "1-4h": { size_mult: 0.65, min_confidence_add: 5, max_hold_mult: 0.65 }
+    "30m-1h": { size_mult: 0.45, min_confidence_add: 8, max_hold_mult: 0.45 }
+    "<30m": { size_mult: 0.20, min_confidence_add: 12, max_hold_mult: 0.25 }
 
-# Gap-Fix Phase 6 — Expected value gate (does NOT map rule_score → P(win))
 ev_engine:
   enabled: true
   min_ev: 0.0
-  adverse_pct: 0.12
-  reward_pct: 0.18
+  adverse_pct: 0.14
+  reward_pct: 0.20
   min_trades_for_pwin: 8
-  prior_pwin: 0.45
+  prior_pwin: 0.48
   assumed_fee_pct_of_premium: 0.02
-  # Paper: collect stats but avoid negative-EV marginal fills.
   paper:
     enabled: true
-    prior_pwin: 0.50
-    min_ev: 0.0
-    bypass_when_rule_score_gte: 82
+    prior_pwin: 0.52
+    min_ev: 0.02
+    bypass_when_rule_score_gte: 88
 
-# Gap-Fix Phase 7 — strategy family / health
 strategy_health:
   min_trades: 10
   demote_weak_multiplier: 0.85

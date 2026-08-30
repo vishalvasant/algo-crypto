@@ -33,6 +33,37 @@ def ema_series(values: list[Decimal], period: int) -> list[Decimal | None]:
   return out
 
 
+def aggregate_m1_clock(m1: list[Candle], minutes: int) -> list[Candle]:
+  """Clock-aligned OHLCV buckets from 1m (matches exchange candle boundaries)."""
+  if not m1 or minutes < 1:
+    return []
+  from collections import defaultdict
+
+  buckets: dict[datetime, list[Candle]] = defaultdict(list)
+  for c in m1:
+    epoch = int(c.ts.timestamp())
+    bucket_epoch = epoch - (epoch % (minutes * 60))
+    bucket_ts = datetime.fromtimestamp(bucket_epoch, tz=c.ts.tzinfo or IST)
+    buckets[bucket_ts].append(c)
+
+  out: list[Candle] = []
+  for ts in sorted(buckets.keys()):
+    chunk = buckets[ts]
+    out.append(
+      Candle(
+        instrument_token=chunk[0].instrument_token or "BTCUSD",
+        ts=ts,
+        open=chunk[0].open,
+        high=max(c.high for c in chunk),
+        low=min(c.low for c in chunk),
+        close=chunk[-1].close,
+        volume=sum((c.volume or 0) for c in chunk) or None,
+        interval=chunk[0].interval,
+      )
+    )
+  return out
+
+
 def aggregate_from_m5(m5: list[Candle], minutes: int = 15) -> list[Candle]:
   """Build higher-TF bars from 5m (15m = 3×5m)."""
   if not m5 or minutes < 5 or minutes % 5 != 0:

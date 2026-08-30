@@ -1,0 +1,53 @@
+{
+  "trades": 3,
+  "wins": 1,
+  "losses": 2,
+  "win_rate_pct": 33.3,
+  "gross_pnl_usd": 0.120025875,
+  "fees_usd": 0.0410119686375,
+  "net_pnl_usd": 0.0790139063625,
+  "avg_net_usd": 0.0263379687875,
+  "by_setup": {
+    "vwap_trend": {
+      "n": 3,
+      "net": 0.0790139063625
+    }
+  },
+  "by_exit_reason": {
+    "time_stop": {
+      "n": 1,
+      "net": 0.1645213756375
+    },
+    "adverse_momentum": {
+      "n": 2,
+      "net": -0.085507469275
+    }
+  },
+  "trade_log": [
+    {
+      "setup": "vwap_trend",
+      "side": "CE",
+      "net": 0.1645213756375,
+      "exit": "time_stop",
+      "hold_s": 1260
+    },
+    {
+      "setup": "vwap_trend",
+      "side": "CE",
+      "net": -0.032841507375,
+      "exit": "adverse_momentum",
+      "hold_s": 180
+    },
+    {
+      "setup": "vwap_trend",
+      "side": "CE",
+      "net": -0.0526659619,
+      "exit": "adverse_momentum",
+      "hold_s": 660
+    }
+  ],
+  "bars": 2892,
+  "from": "2026-08-23T04:20:00+00:00",
+  "to": "2026-08-29T14:11:00+00:00",
+  "config_version": "strategy_router_v2.1.0_crypto"
+}
