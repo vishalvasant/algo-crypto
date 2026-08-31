@@ -304,6 +304,25 @@ class QualityGate:
       conf = max(0, min(100, conf + iv_adj))
       logs.append(f"iv_setup_quality={iv_adj} ({iv_why})")
 
+    crypto_q = self._config.strategy.get("crypto_quality") or {}
+    structure = extra.get("structure_5m")
+    struct_bonus = int(crypto_q.get("structure_bonus", 0))
+    if struct_bonus > 0 and structure:
+      if signal.side == "CE" and structure in ("hhhl", "mixed"):
+        conf = min(100, conf + struct_bonus)
+        logs.append(f"crypto_structure_bonus=+{struct_bonus}")
+      elif signal.side == "PE" and structure in ("lllh", "mixed"):
+        conf = min(100, conf + struct_bonus)
+        logs.append(f"crypto_structure_bonus=+{struct_bonus}")
+    rp_bonus = int(crypto_q.get("reclaim_pullback_bonus", 0))
+    if rp_bonus > 0 and signal.setup_type in ("vwap_reclaim", "vwap_pullback"):
+      conf = min(100, conf + rp_bonus)
+      logs.append(f"crypto_reclaim_pullback_bonus=+{rp_bonus}")
+    tm_bonus = int(crypto_q.get("trend_momentum_bonus", 0))
+    if tm_bonus > 0 and signal.setup_type in ("vwap_trend", "momentum_continuation", "trend_continuation"):
+      conf = min(100, conf + tm_bonus)
+      logs.append(f"crypto_trend_momentum_bonus=+{tm_bonus}")
+
     # Persist component breakdown on signal metadata for §16 JSON mapping
     signal.scanner_metadata = {
       **signal.scanner_metadata,

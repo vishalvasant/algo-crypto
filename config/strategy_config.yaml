@@ -1,34 +1,45 @@
 active_scanner: router
-strategy_version: strategy_router_v2.1.0_crypto
+strategy_version: strategy_router_v2.2.0_crypto
 
 # Rule-based router — crypto-tuned (BTC/ETH options on Delta).
 router:
-  min_confidence: 72
+  min_confidence: 70
   log_every_decision: true
   enabled_strategies:
-    - vwap_reclaim
-    - vwap_pullback
     - vwap_trend
-    - trend_continuation
+    - momentum_continuation
 
 # Sweet-zone entries: not hugging VWAP (chop) and not chasing extended moves.
 crypto_entry:
   enabled: true
-  min_vwap_distance_atr: 0.04
-  max_vwap_distance_atr: 0.40
+  min_vwap_distance_atr: 0.03
+  max_vwap_distance_atr: 0.38
+  reclaim_max_vwap_distance_atr: 0.16
+  momentum_max_vwap_distance_atr: 0.36
+  trend_max_vwap_distance_atr: 0.50
   allowed_regimes:
     - trending_up
     - trending_down
     - breakout
+    - high_volatility
 
-# ATR-relative gates (BTC ~$77k — avoid NSE "points" misfit).
+# Quality gate bonuses (paper / thin option chain).
+crypto_quality:
+  structure_bonus: 8
+  reclaim_pullback_bonus: 5
+  trend_momentum_bonus: 4
+  require_structure_for_reclaim: false
+  require_structure_for_trend: true
+  require_ema_for_momentum: false
+
+# ATR-relative gates
 crypto_scaling:
   use_atr_relative: true
-  max_distance_to_vwap_atr: 0.12
-  pullback_min_extension_atr: 0.08
-  pullback_max_distance_atr: 0.18
-  trend_min_distance_atr: 0.04
-  trend_max_distance_atr: 0.45
+  max_distance_to_vwap_atr: 0.22
+  pullback_min_extension_atr: 0.04
+  pullback_max_distance_atr: 0.22
+  trend_min_distance_atr: 0.03
+  trend_max_distance_atr: 0.50
 
 regime:
   high_vol_atr_mult: 1.4
@@ -41,7 +52,7 @@ regime:
   structure_lookback_5m: 6
   block_sideways: true
   block_high_volatility: false
-  max_risk_score_to_trade: 72
+  max_risk_score_to_trade: 78
   opening_phase_minutes: 30
   late_phase_after_minutes: 330
 
@@ -55,7 +66,7 @@ vwap_reclaim:
   trigger_timeframe: 1m
   setup_lookback_bars: 8
   trigger_lookback_bars: 5
-  max_fresh_trigger_bars: 3
+  max_fresh_trigger_bars: 1
   min_bars_with_vwap_3m: 0
   max_distance_to_vwap_points: 120
   require_5m_structure: false
@@ -71,10 +82,10 @@ vwap_pullback:
   neutral_bias_blocks_trade: true
 
 vwap_trend:
-  min_bars_on_side: 3
+  min_bars_on_side: 2
   min_distance_to_vwap_points: 25
   max_distance_to_vwap_points: 400
-  require_1m_momentum: true
+  require_1m_momentum: false
   neutral_bias_blocks_trade: true
 
 strike_selection:

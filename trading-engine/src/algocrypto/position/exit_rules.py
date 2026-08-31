@@ -149,7 +149,36 @@ def evaluate_momentum_exit(
       adverse_pct = adverse_pct * scale
 
   if current_ltp <= entry_price * (Decimal("1") - adverse_pct):
-    return ExitDecision(True, "adverse_momentum")
+    defer_adverse = False
+    if cfg.get("adverse_require_vwap_lost", False):
+      spot = market_data.spot_ltp
+      vwap = market_data.session_vwap_value
+      if spot is not None and vwap is not None:
+        if atr is not None and atr > 0:
+          buffer = atr * Decimal(str(cfg.get("vwap_side_exit_atr_mult", 0.35)))
+        else:
+          buffer = Decimal(str(cfg.get("bias_flip_buffer_points", 20)))
+        if option_side == "CE" and spot >= (vwap - buffer):
+          defer_adverse = True
+        elif option_side == "PE" and spot <= (vwap + buffer):
+          defer_adverse = True
+    if not defer_adverse:
+      return ExitDecision(True, "adverse_momentum")
+
+  if cfg.get("vwap_side_exit", False):
+    vwap_min_hold = int(cfg.get("vwap_side_exit_min_hold_seconds", min_hold))
+    if held_seconds >= vwap_min_hold:
+      spot = market_data.spot_ltp
+      vwap = market_data.session_vwap_value
+      if spot is not None and vwap is not None:
+        if atr is not None and atr > 0:
+          buffer = atr * Decimal(str(cfg.get("vwap_side_exit_atr_mult", 0.35)))
+        else:
+          buffer = Decimal(str(cfg.get("bias_flip_buffer_points", 20)))
+        if option_side == "CE" and spot < (vwap - buffer):
+          return ExitDecision(True, "vwap_side_lost")
+        if option_side == "PE" and spot > (vwap + buffer):
+          return ExitDecision(True, "vwap_side_lost")
 
   min_profit_pct = Decimal(str(cfg.get("min_profit_before_trail_pct", 18))) / Decimal("100")
   giveback_pct = _trail_giveback_pct(cfg, trail_key, trail_default, mfe_points, entry_price)

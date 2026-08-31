@@ -5,8 +5,9 @@ from decimal import Decimal
 
 from algocrypto.models.events import CandidateSignal, FeatureSnapshot, MarketRegime
 
-_TREND_FOLLOW = frozenset({"vwap_trend", "trend_continuation"})
+_TREND_FOLLOW = frozenset({"vwap_trend", "trend_continuation", "momentum_continuation"})
 _PULLBACK = frozenset({"vwap_pullback"})
+_RECLAIM = frozenset({"vwap_reclaim"})
 
 
 def atr_threshold(
@@ -56,9 +57,30 @@ def crypto_entry_allowed(
   if setup in _PULLBACK:
     return True, ""
 
+  if setup in _RECLAIM:
+    cross_atr = extra.get("reclaim_cross_distance_atr")
+    dist_atr = float(cross_atr) if cross_atr is not None else abs_dist / atr_f
+    reclaim_max = float(cfg.get("reclaim_max_vwap_distance_atr", 0.14))
+    if reclaim_max > 0 and dist_atr > reclaim_max:
+      return False, "reclaim_too_late"
+    if min_mult > 0 and dist_atr < min_mult:
+      return False, "too_close_to_vwap"
+    return True, ""
+
   if setup in _TREND_FOLLOW:
     if min_mult > 0 and abs_dist < atr_f * min_mult:
       return False, "too_close_to_vwap"
+    if setup == "momentum_continuation":
+      mom_max = float(cfg.get("momentum_max_vwap_distance_atr", 0))
+      if mom_max > 0 and abs_dist > atr_f * mom_max:
+        return False, "too_extended"
+      return True, ""
+    trend_max = float(cfg.get("trend_max_vwap_distance_atr", 0))
+    if trend_max <= 0:
+      scale = strategy_cfg.get("crypto_scaling") or {}
+      trend_max = float(scale.get("trend_max_distance_atr", 0))
+    if trend_max > 0 and abs_dist > atr_f * trend_max:
+      return False, "too_extended"
     return True, ""
 
   if min_mult > 0 and abs_dist < atr_f * min_mult:

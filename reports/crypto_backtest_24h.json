@@ -1,53 +1,74 @@
 {
-  "trades": 3,
-  "wins": 1,
-  "losses": 2,
-  "win_rate_pct": 33.3,
-  "gross_pnl_usd": 0.120025875,
-  "fees_usd": 0.0410119686375,
-  "net_pnl_usd": 0.0790139063625,
-  "avg_net_usd": 0.0263379687875,
+  "trades": 6,
+  "wins": 3,
+  "losses": 3,
+  "win_rate_pct": 50.0,
+  "gross_pnl_usd": 0.071411875,
+  "fees_usd": 0.0493292104375,
+  "net_pnl_usd": 0.0220826645625,
+  "avg_net_usd": 0.00368044409375,
   "by_setup": {
     "vwap_trend": {
-      "n": 3,
-      "net": 0.0790139063625
+      "n": 6,
+      "net": 0.0220826645625
     }
   },
   "by_exit_reason": {
-    "time_stop": {
-      "n": 1,
-      "net": 0.1645213756375
-    },
     "adverse_momentum": {
-      "n": 2,
-      "net": -0.085507469275
+      "n": 3,
+      "net": -0.108263523625
+    },
+    "time_stop": {
+      "n": 3,
+      "net": 0.1303461881875
     }
   },
   "trade_log": [
     {
       "setup": "vwap_trend",
-      "side": "CE",
-      "net": 0.1645213756375,
-      "exit": "time_stop",
+      "side": "PE",
+      "net": -0.02288159685,
+      "exit": "adverse_momentum",
       "hold_s": 1260
     },
     {
       "setup": "vwap_trend",
       "side": "CE",
-      "net": -0.032841507375,
+      "net": 0.1215596558375,
+      "exit": "time_stop",
+      "hold_s": 1380
+    },
+    {
+      "setup": "vwap_trend",
+      "side": "CE",
+      "net": -0.053779515375,
       "exit": "adverse_momentum",
       "hold_s": 180
     },
     {
       "setup": "vwap_trend",
-      "side": "CE",
-      "net": -0.0526659619,
+      "side": "PE",
+      "net": -0.0316024114,
       "exit": "adverse_momentum",
-      "hold_s": 660
+      "hold_s": 240
+    },
+    {
+      "setup": "vwap_trend",
+      "side": "CE",
+      "net": 0.004341672125,
+      "exit": "time_stop",
+      "hold_s": 1380
+    },
+    {
+      "setup": "vwap_trend",
+      "side": "PE",
+      "net": 0.004444860225,
+      "exit": "time_stop",
+      "hold_s": 1380
     }
   ],
   "bars": 2892,
   "from": "2026-08-23T04:20:00+00:00",
   "to": "2026-08-29T14:11:00+00:00",
-  "config_version": "strategy_router_v2.1.0_crypto"
+  "config_version": "strategy_router_v2.2.0_crypto"
 }

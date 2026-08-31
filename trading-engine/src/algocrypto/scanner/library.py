@@ -154,6 +154,15 @@ def _vwap_pullback_aligned(features: FeatureSnapshot) -> bool:
   return False
 
 
+def _structure_aligned(features: FeatureSnapshot, side: str) -> bool:
+  structure = str((features.extra or {}).get("structure_5m") or "")
+  if side == "CE":
+    return structure in ("hhhl", "mixed")
+  if side == "PE":
+    return structure in ("lllh", "mixed")
+  return False
+
+
 class FeatureSetupScanner:
   """Generic scanner: strategy_setups[name] bull/bear → CE/PE contract."""
 
@@ -187,11 +196,32 @@ class FeatureSetupScanner:
     if self.name == "vwap_reclaim" and not _vwap_reclaim_aligned(features, setup):
       return None
 
+    side = "CE" if setup == "bull" else "PE"
+    if self.name == "vwap_reclaim":
+      cq = self._config.strategy.get("crypto_quality") or {}
+      if cq.get("require_structure_for_reclaim", True) and not _structure_aligned(features, side):
+        return None
+
     if self.name == "vwap_pullback" and not _vwap_pullback_aligned(features):
       return None
 
-    # mean_reversion: bull = fade down → CE, bear = fade up → PE
     side = "CE" if setup == "bull" else "PE"
+    trend_names = ("vwap_trend", "momentum_continuation", "trend_continuation")
+    if self.name in trend_names:
+      cq = self._config.strategy.get("crypto_quality") or {}
+      if cq.get("require_structure_for_trend", True) and not _structure_aligned(features, side):
+        return None
+      if self.name == "momentum_continuation" and cq.get("require_ema_for_momentum", True):
+        e9, e21 = extra.get("ema9"), extra.get("ema21")
+        spot = features.nifty_spot
+        if e9 is None or e21 is None or spot is None:
+          return None
+        if side == "CE" and float(e9) <= float(e21):
+          return None
+        if side == "PE" and float(e9) >= float(e21):
+          return None
+
+    # mean_reversion: bull = fade down → CE, bear = fade up → PE
     return _emit(self._config, self.name, side, features, universe, option_states)
 
 

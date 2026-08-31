@@ -105,26 +105,24 @@ class FeatureEngine:
     elif trigger_1m == "vwap_reclaim_cross_down" and bias != Bias.BEARISH:
       trigger_1m = None
 
-    # Crypto: fresh 1m cross + recent 3m on wrong side counts as reclaim setup.
-    if (
-      use_atr
-      and trigger_1m
-      and setup_3m is None
-      and m3
-      and vwap is not None
-    ):
-      w = m3[-lookback:] if len(m3) >= lookback else m3
+    # Crypto: fresh 1m VWAP cross + aligned bias is a reclaim setup.
+    reclaim_cross_dist_atr: float | None = None
+    if use_atr and trigger_1m and setup_3m is None and vwap is not None:
       if trigger_1m == "vwap_reclaim_cross_up" and bias == Bias.BULLISH:
-        if any(b.close < vwap for b in w):
-          setup_3m = "vwap_reclaim_bull"
+        setup_3m = "vwap_reclaim_bull"
       elif trigger_1m == "vwap_reclaim_cross_down" and bias == Bias.BEARISH:
-        if any(b.close > vwap for b in w):
-          setup_3m = "vwap_reclaim_bear"
+        setup_3m = "vwap_reclaim_bear"
+    if trigger_1m and vwap is not None and m1 and atr is not None and float(atr) > 0:
+      reclaim_cross_dist_atr = float(abs(m1[-1].close - vwap) / atr)
 
     # Distance gate for reclaim setup (proximity to VWAP)
     if setup_3m and spot is not None and vwap is not None:
       dist = abs(spot - vwap)
-      if dist > max_dist:
+      reclaim_live = (
+        trigger_1m
+        and setup_3m in ("vwap_reclaim_bull", "vwap_reclaim_bear")
+      )
+      if dist > max_dist and not reclaim_live:
         setup_3m = None
       elif (
         min_bars_with > 0
@@ -171,6 +169,12 @@ class FeatureEngine:
           lookback=int(self._pullback.get("trigger_lookback_bars", 3)),
           max_near_vwap=pb_max_dist * Decimal("2"),
         )
+      if pullback_setup and not pullback_trigger and len(m1) >= 2:
+        prev_c, curr_c = m1[-2].close, m1[-1].close
+        if bias == Bias.BULLISH and curr_c > prev_c:
+          pullback_trigger = "vwap_pullback_bounce_up"
+        elif bias == Bias.BEARISH and curr_c < prev_c:
+          pullback_trigger = "vwap_pullback_bounce_down"
 
     trend_cfg = self._config.strategy.get("vwap_trend", {})
     trend_setup = None
@@ -306,6 +310,7 @@ class FeatureEngine:
       "max_distance_to_vwap_points": float(max_dist),
       "max_distance_to_vwap_atr_mult": float(self._crypto_scale.get("max_distance_to_vwap_atr") or 0),
       "atr_1m": float(atr) if atr is not None else None,
+      "reclaim_cross_distance_atr": reclaim_cross_dist_atr,
       "setup_lookback_bars": lookback,
       "require_5m_structure_reclaim": bool(self._reclaim.get("require_5m_structure", False)),
       "skip_reasons": skip_reasons,

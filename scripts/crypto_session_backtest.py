@@ -111,6 +111,7 @@ class ReplayMarketData:
   def spot_ltp(self) -> Decimal | None:
     return self._spot
 
+  @property
   def session_vwap_value(self) -> Decimal | None:
     from algocrypto.market_data.vwap import session_vwap
 
@@ -290,7 +291,7 @@ def run_replay(
   router._min_confidence = int(router_cfg.get("min_confidence", 80))
   router._log_every = False
   exit_cfg = config.position_exit
-  state = BacktestState(cooldown_sec=180)
+  state = BacktestState(cooldown_sec=90)
   capital = Decimal("250")
   min_bars = 120
 
@@ -464,7 +465,7 @@ def summarize(state: BacktestState) -> dict:
 async def main() -> None:
   parser = argparse.ArgumentParser(description="Crypto session backtest from DB candles")
   parser.add_argument("--hours", type=float, default=24.0, help="0 = all DB candles")
-  parser.add_argument("--scan-every", type=int, default=2, help="Minutes between entry scans")
+  parser.add_argument("--scan-every", type=int, default=1, help="Minutes between entry scans")
   parser.add_argument("--out", type=str, default="reports/crypto_backtest_24h.json")
   args = parser.parse_args()
 

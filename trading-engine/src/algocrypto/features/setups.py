@@ -107,15 +107,14 @@ def _orb(spot: Decimal | None, ind: dict, bias: Bias) -> str | None:
 
 
 def _momentum(m1: list[Candle], bias: Bias, vwap: Decimal | None) -> str | None:
-  if len(m1) < 4 or bias == Bias.NEUTRAL or vwap is None:
+  if len(m1) < 3 or bias == Bias.NEUTRAL or vwap is None:
     return None
-  closes = [c.close for c in m1[-4:]]
-  if bias == Bias.BULLISH and closes[-1] > closes[0] and closes[-1] > vwap:
-    if all(closes[i] >= closes[i - 1] for i in range(1, len(closes))):
-      return "bull"
-  if bias == Bias.BEARISH and closes[-1] < closes[0] and closes[-1] < vwap:
-    if all(closes[i] <= closes[i - 1] for i in range(1, len(closes))):
-      return "bear"
+  window = m1[-3:]
+  c0, c2 = window[0].close, window[-1].close
+  if bias == Bias.BULLISH and c2 > c0 and c2 > vwap and c2 >= window[-2].close:
+    return "bull"
+  if bias == Bias.BEARISH and c2 < c0 and c2 < vwap and c2 <= window[-2].close:
+    return "bear"
   return None
 
 
